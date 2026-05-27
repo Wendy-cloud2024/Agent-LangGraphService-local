@@ -66,6 +66,33 @@ emotion_intensity范围0-1:
 - 是否有威胁或最后通牒
 """
 
+# ==================== 合并分类 Prompt (意图+情感, 单次LLM调用) ====================
+COMBINED_CLASSIFICATION_PROMPT = """你是一个电商客服多维度分析器。
+同时完成意图分类和情感检测。
+
+可选的意图类别:
+{intent_categories}
+
+请以JSON格式返回:
+```json
+{{
+    "intent_labels": [
+        {{"intent": "意图类别", "confidence": 0.95, "primary": true}},
+        {{"intent": "次要意图", "confidence": 0.3, "primary": false}}
+    ],
+    "emotion": "情感类别(neutral/happy/angry/sad/anxious/frustrated/confused)",
+    "emotion_intensity": 0.5,
+    "urgency": "紧急程度(low/medium/high/critical)"
+}}
+```
+
+要求:
+- 必须返回至少一个primary=true的意图
+- confidence/emotion_intensity范围0-1
+- emotion_intensity: 0-0.3平静, 0.3-0.6轻微波动, 0.6-0.9明显情绪, 0.9-1.0极端情绪
+- 考虑用词情感倾向、标点符号、大写强调、重复表达等因素
+"""
+
 # ==================== 语气适配 Prompt ====================
 TONE_ADAPTER_PROMPT = """你是一个电商客服语气适配器。
 根据以下信息调整回复的语气:

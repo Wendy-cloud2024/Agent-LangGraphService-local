@@ -28,8 +28,7 @@ from src.config.settings import (
     HISTORY_WINDOW_ROUNDS,
 )
 from src.config.prompts import (
-    INTENT_CLASSIFICATION_PROMPT,
-    EMOTION_DETECTION_PROMPT,
+    COMBINED_CLASSIFICATION_PROMPT,
     ROUTING_DECISION_PROMPT,
 )
 from src.config.llm import create_llm
@@ -151,45 +150,34 @@ def orchestrator_gate(state: dict) -> dict:
         return updates
 
     # ============================================================
-    # ③④⑤⑥⑦⑧ 需要LLM的处理步骤
+    # ③④⑤⑥⑦ 需要LLM的处理步骤
     # ============================================================
     llm = create_llm(CLASSIFIER_MODEL, temperature=0)
 
     # ④ 语言检测（规则匹配，不需要LLM）
     updates["language"] = _detect_language(customer_text)
 
-    # ⑥ 多维标签分类
-    intent_result = {}
+    # ⑥⑦ 合并: 多维标签分类 + 情感检测（单次LLM调用）
+    combined_result = {}
     try:
         categories_str = "\n".join(f"  - {c}" for c in INTENT_CATEGORIES)
-        prompt = INTENT_CLASSIFICATION_PROMPT.format(intent_categories=categories_str)
+        prompt = COMBINED_CLASSIFICATION_PROMPT.format(intent_categories=categories_str)
         response = llm.invoke([
             {"role": "system", "content": prompt},
             {"role": "user", "content": customer_text},
         ])
-        intent_result = parse_json_response(response.content)
+        combined_result = parse_json_response(response.content)
     except Exception as e:
-        logger.error(f"意图分类失败: {e}")
+        logger.error(f"合并分类失败: {e}")
 
-    intent_labels = intent_result.get("intent_labels", [])
+    intent_labels = combined_result.get("intent_labels", [])
     if not intent_labels:
         intent_labels = [{"intent": "general_faq", "confidence": 0.5, "primary": True}]
     updates["intent_labels"] = intent_labels
 
-    # ⑦ 情感检测 + 紧急度
-    emotion_result = {}
-    try:
-        response = llm.invoke([
-            {"role": "system", "content": EMOTION_DETECTION_PROMPT},
-            {"role": "user", "content": customer_text},
-        ])
-        emotion_result = parse_json_response(response.content)
-    except Exception as e:
-        logger.error(f"情感检测失败: {e}")
-
-    updates["emotion"] = emotion_result.get("emotion", "neutral")
-    updates["emotion_intensity"] = float(emotion_result.get("emotion_intensity", 0.3))
-    updates["urgency"] = emotion_result.get("urgency", "low")
+    updates["emotion"] = combined_result.get("emotion", "neutral")
+    updates["emotion_intensity"] = float(combined_result.get("emotion_intensity", 0.3))
+    updates["urgency"] = combined_result.get("urgency", "low")
 
     # ============================================================
     # ⑧ 路由决策
