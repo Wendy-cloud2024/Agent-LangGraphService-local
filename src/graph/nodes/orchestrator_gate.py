@@ -18,7 +18,6 @@ import json
 import logging
 
 from langchain_core.messages import HumanMessage
-from langchain_openai import ChatOpenAI
 
 from src.config.settings import (
     CLASSIFIER_MODEL,
@@ -27,13 +26,13 @@ from src.config.settings import (
     INTENT_CATEGORIES,
     INTENT_TO_SUBGRAPH,
     HISTORY_WINDOW_ROUNDS,
-    LLM_BASE_URL,
 )
 from src.config.prompts import (
     INTENT_CLASSIFICATION_PROMPT,
     EMOTION_DETECTION_PROMPT,
     ROUTING_DECISION_PROMPT,
 )
+from src.config.llm import create_llm
 from src.utils.safety import check_sensitive_words, check_image_safety
 from src.utils.observability import TraceTimer, trace
 from src.utils.parse import parse_json_response
@@ -154,7 +153,7 @@ def orchestrator_gate(state: dict) -> dict:
     # ============================================================
     # ③④⑤⑥⑦⑧ 需要LLM的处理步骤
     # ============================================================
-    llm = ChatOpenAI(model=CLASSIFIER_MODEL, temperature=0, base_url=LLM_BASE_URL)
+    llm = create_llm(CLASSIFIER_MODEL, temperature=0)
 
     # ④ 语言检测（规则匹配，不需要LLM）
     updates["language"] = _detect_language(customer_text)

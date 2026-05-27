@@ -15,16 +15,14 @@ import re
 import json
 import logging
 
-from langchain_openai import ChatOpenAI
-
 from src.config.settings import (
     CLASSIFIER_MODEL,
-    LLM_BASE_URL,
     QUALITY_SCORE_LOW,
     QUALITY_SCORE_CRITICAL,
     QUALITY_SCORE_REPROCESS,
     MAX_AUTO_CORRECTION_ATTEMPTS,
 )
+from src.config.llm import create_llm
 from src.config.prompts import OUTPUT_GATE_PROMPT
 from src.utils.safety import full_safety_check
 from src.utils.observability import TraceTimer, trace
@@ -51,7 +49,7 @@ def output_gate(state: dict) -> dict:
     risk_level = "low"
     llm_flags = []
     try:
-        llm = ChatOpenAI(model=CLASSIFIER_MODEL, temperature=0, base_url=LLM_BASE_URL)
+        llm = create_llm(CLASSIFIER_MODEL, temperature=0)
         prompt = OUTPUT_GATE_PROMPT.format(
             draft_response=draft,
             intent_labels=json.dumps(state.get("intent_labels", []), ensure_ascii=False),

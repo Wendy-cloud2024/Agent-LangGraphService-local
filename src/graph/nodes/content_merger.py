@@ -13,9 +13,8 @@
 import json
 import logging
 
-from langchain_openai import ChatOpenAI
-
-from src.config.settings import GENERATOR_MODEL, LLM_BASE_URL
+from src.config.settings import GENERATOR_MODEL
+from src.config.llm import create_llm
 from src.config.prompts import CONTENT_MERGER_PROMPT, FALLBACK_MESSAGES
 from src.utils.observability import TraceTimer, trace
 
@@ -81,7 +80,7 @@ def content_merger(state: dict) -> dict:
             })
 
     # 使用LLM融合内容
-    llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
+    llm = create_llm(GENERATOR_MODEL, temperature=0.3)
     try:
         prompt = CONTENT_MERGER_PROMPT.format(
             agent_findings=json.dumps(processed_findings, ensure_ascii=False, indent=2),

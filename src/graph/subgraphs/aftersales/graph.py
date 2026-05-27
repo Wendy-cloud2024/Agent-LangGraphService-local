@@ -23,9 +23,9 @@ import json
 import logging
 
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 
-from src.config.settings import GENERATOR_MODEL, LLM_BASE_URL
+from src.config.settings import GENERATOR_MODEL
+from src.config.llm import create_llm
 from src.state.schema import AfterSalesState, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
 from src.tools.ecommerce_tools import (
     get_order_details, check_return_eligibility, check_warranty_status,
@@ -49,7 +49,7 @@ def issue_identify(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0)
         response = llm.invoke([
             {"role": "system", "content": """分类客户的售后问题类型。
 返回JSON: {"issue_type": "return|exchange|refund|warranty", "description": "...", "confidence": 0.9}"""},
@@ -295,7 +295,7 @@ def aftersales_respond(state: dict) -> dict:
 
     # 生成回复
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0.3)
         prompt = f"""根据以下信息回复客户的售后请求:
 
 问题类型: {issue_type}

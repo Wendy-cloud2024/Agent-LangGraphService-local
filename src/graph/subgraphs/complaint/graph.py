@@ -21,9 +21,9 @@ import json
 import logging
 
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 
-from src.config.settings import GENERATOR_MODEL, LLM_BASE_URL
+from src.config.settings import GENERATOR_MODEL
+from src.config.llm import create_llm
 from src.state.schema import ComplaintState, RESULT_TYPE_NORMAL, ESCALATE_TO_HUMAN
 from src.tools.ecommerce_tools import get_customer_orders, apply_compensation, get_order_details
 from src.tools.vision_tools import detect_quality_issue
@@ -45,7 +45,7 @@ def complaint_classifier(state: dict) -> dict:
     intensity = state.get("emotion_intensity", 0.3)
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0)
         response = llm.invoke([
             {"role": "system", "content": """分类客户的投诉。
 返回JSON: {
@@ -126,7 +126,7 @@ def empathy_responder(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0.3)
         response = llm.invoke([
             {"role": "system", "content": f"""你是一个有同理心的客服代表。
 客户当前情感: {emotion}
@@ -159,7 +159,7 @@ def resolution_planner(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0.3)
         context_str = json.dumps(context, ensure_ascii=False)[:500]
         response = llm.invoke([
             {"role": "system", "content": f"""根据投诉信息提出合理的补偿方案。
@@ -226,7 +226,7 @@ def complaint_respond(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0.3)
         prompt = f"""整合以下信息，回复客户的投诉:
 
 共情回应: {empathy}

@@ -18,10 +18,10 @@
 import logging
 
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 
-from src.config.settings import GENERATOR_MODEL, LLM_BASE_URL
+from src.config.settings import GENERATOR_MODEL
+from src.config.llm import create_llm
 from src.state.schema import PreSalesState, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
 from src.tools.ecommerce_tools import check_inventory, find_promotions, search_knowledge_base
 from src.tools.vision_tools import visual_product_match
@@ -47,7 +47,7 @@ def product_lookup(state: dict) -> dict:
         tools = [visual_product_match]
         if media_desc:
             # 有图片时使用视觉工具匹配SKU
-            llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0, base_url=LLM_BASE_URL).bind_tools(tools)
+            llm = create_llm(GENERATOR_MODEL, temperature=0).bind_tools(tools)
             response = llm.invoke([
                 {"role": "system", "content": "根据图片描述匹配商品SKU。"},
                 {"role": "user", "content": f"图片描述: {media_desc}"},
@@ -59,7 +59,7 @@ def product_lookup(state: dict) -> dict:
 
         if not product_info:
             # 文本查询
-            llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0, base_url=LLM_BASE_URL)
+            llm = create_llm(GENERATOR_MODEL, temperature=0)
             response = llm.invoke([
                 {"role": "system", "content": "从客户消息中提取商品名称或关键词，返回JSON: {\"product_name\": \"...\", \"keywords\": [...]}"},
                 {"role": "user", "content": last_msg},
@@ -139,7 +139,7 @@ def recommendation_engine(state: dict) -> dict:
     inventory = state.get("inventory_result", {})
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0.3)
         prompt = f"""基于以下商品信息生成3个推荐:
 商品: {product_info}
 库存: {inventory}
@@ -217,7 +217,7 @@ def presales_respond(state: dict) -> dict:
 
     # 生成回复
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
+        llm = create_llm(GENERATOR_MODEL, temperature=0.3)
         prompt = f"""根据以下信息回答客户的商品咨询:
 
 商品信息: {product_info}
