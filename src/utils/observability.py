@@ -17,6 +17,7 @@
 
 import time
 import uuid
+import functools
 from typing import Any
 
 from src.config.settings import TRACE_ENABLED, TRACE_SAMPLE_RATE
@@ -69,3 +70,31 @@ class TraceTimer:
 
     def elapsed_ms(self) -> float:
         return (time.perf_counter() - self._start) * 1000
+
+
+def traced(node_name: str):
+    """装饰器: 自动为节点函数添加计时和 trace 事件
+
+    用法:
+        @traced("my_node")
+        def my_node(state: dict) -> dict:
+            # 不需要手动创建 timer/trace_id
+            result = do_something()
+            return {"key": value}
+
+    被装饰的函数返回的 dict 中会自动注入 trace_events。
+    如果函数自身已设置了 trace_events，则不会覆盖。
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(state: dict) -> dict:
+            timer = TraceTimer()
+            timer.start()
+            trace_id = state.get("trace_id", "")
+            result = func(state)
+            result.setdefault("trace_events", [
+                trace(trace_id, node_name, "completed", timer.elapsed_ms())
+            ])
+            return result
+        return wrapper
+    return decorator
