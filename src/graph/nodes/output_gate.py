@@ -28,24 +28,9 @@ from src.config.settings import (
 from src.config.prompts import OUTPUT_GATE_PROMPT
 from src.utils.safety import full_safety_check
 from src.utils.observability import TraceTimer, trace
+from src.utils.parse import parse_json_response
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_json_response(content: str) -> dict:
-    """从LLM响应中提取JSON"""
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-    if match:
-        content = match.group(1).strip()
-    else:
-        match = re.search(r"\{[\s\S]*\}", content)
-        if match:
-            content = match.group(0)
-    content = content.replace("{{", "{").replace("}}", "}")
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {}
 
 
 def output_gate(state: dict) -> dict:
@@ -73,7 +58,7 @@ def output_gate(state: dict) -> dict:
             emotion=state.get("emotion", "neutral"),
         )
         response = llm.invoke([{"role": "user", "content": prompt}])
-        result = _parse_json_response(response.content)
+        result = parse_json_response(response.content)
         quality_score = float(result.get("quality_score", 0.7))
         risk_level = result.get("risk_level", "low")
         llm_flags = result.get("safety_flags", [])

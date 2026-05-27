@@ -34,18 +34,9 @@ from src.tools.ecommerce_tools import (
 )
 from src.tools.vision_tools import detect_product_damage, ocr_product_label
 from src.utils.observability import TraceTimer, trace
+from src.utils.parse import parse_json_response
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_json(content: str) -> dict:
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-    if match:
-        content = match.group(1).strip()
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {}
 
 
 def issue_identify(state: dict) -> dict:
@@ -64,7 +55,7 @@ def issue_identify(state: dict) -> dict:
 返回JSON: {"issue_type": "return|exchange|refund|warranty", "description": "...", "confidence": 0.9}"""},
             {"role": "user", "content": last_msg},
         ])
-        result = _parse_json(response.content)
+        result = parse_json_response(response.content)
         issue_type = result.get("issue_type", "return")
     except Exception as e:
         logger.error(f"问题分类失败: {e}")

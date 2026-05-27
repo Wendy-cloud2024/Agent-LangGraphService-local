@@ -36,6 +36,7 @@ from src.config.prompts import (
 )
 from src.utils.safety import check_sensitive_words, check_image_safety
 from src.utils.observability import TraceTimer, trace
+from src.utils.parse import parse_json_response
 
 logger = logging.getLogger(__name__)
 
@@ -59,26 +60,6 @@ def _match_human_transfer(text: str) -> bool:
         if re.search(pattern, text, re.IGNORECASE):
             return True
     return False
-
-
-def _parse_json_response(content: str) -> dict:
-    """从LLM响应中提取JSON"""
-    # 尝试提取 ```json ... ``` 代码块
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-    if match:
-        content = match.group(1).strip()
-    else:
-        # 尝试提取第一个 { ... } 块
-        match = re.search(r"\{[\s\S]*\}", content)
-        if match:
-            content = match.group(0)
-    # DeepSeek有时返回 {{ }} 转义花括号，替换为单花括号
-    content = content.replace("{{", "{").replace("}}", "}")
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        logger.warning(f"JSON解析失败: {content[:200]}")
-        return {}
 
 
 def orchestrator_gate(state: dict) -> dict:
@@ -187,7 +168,7 @@ def orchestrator_gate(state: dict) -> dict:
             {"role": "system", "content": prompt},
             {"role": "user", "content": customer_text},
         ])
-        intent_result = _parse_json_response(response.content)
+        intent_result = parse_json_response(response.content)
     except Exception as e:
         logger.error(f"意图分类失败: {e}")
 
@@ -203,7 +184,7 @@ def orchestrator_gate(state: dict) -> dict:
             {"role": "system", "content": EMOTION_DETECTION_PROMPT},
             {"role": "user", "content": customer_text},
         ])
-        emotion_result = _parse_json_response(response.content)
+        emotion_result = parse_json_response(response.content)
     except Exception as e:
         logger.error(f"情感检测失败: {e}")
 

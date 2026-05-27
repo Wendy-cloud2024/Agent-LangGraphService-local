@@ -28,18 +28,9 @@ from src.state.schema import ComplaintState, RESULT_TYPE_NORMAL, ESCALATE_TO_HUM
 from src.tools.ecommerce_tools import get_customer_orders, apply_compensation, get_order_details
 from src.tools.vision_tools import detect_quality_issue
 from src.utils.observability import TraceTimer, trace
+from src.utils.parse import parse_json_response
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_json(content: str) -> dict:
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-    if match:
-        content = match.group(1).strip()
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {}
 
 
 def complaint_classifier(state: dict) -> dict:
@@ -65,7 +56,7 @@ def complaint_classifier(state: dict) -> dict:
 }"""},
             {"role": "user", "content": last_msg},
         ])
-        result = _parse_json(response.content)
+        result = parse_json_response(response.content)
     except Exception as e:
         logger.error(f"投诉分类失败: {e}")
         result = {}
@@ -187,7 +178,7 @@ def resolution_planner(state: dict) -> dict:
 返回JSON: {{\"resolution\": \"方案描述\", \"compensation_type\": \"类型\", \"compensation_value\": 0, \"reasoning\": \"理由\"}}"""},
             {"role": "user", "content": last_msg},
         ])
-        plan = _parse_json(response.content)
+        plan = parse_json_response(response.content)
     except Exception as e:
         logger.error(f"方案规划失败: {e}")
         plan = {"resolution": "道歉并提供10元优惠券", "compensation_type": "coupon", "compensation_value": 10}

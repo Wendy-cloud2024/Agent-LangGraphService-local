@@ -30,18 +30,9 @@ from src.tools.ecommerce_tools import (
 )
 from src.tools.vision_tools import ocr_shipping_label
 from src.utils.observability import TraceTimer, trace
+from src.utils.parse import parse_json_response
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_json(content: str) -> dict:
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-    if match:
-        content = match.group(1).strip()
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {}
 
 
 def order_identify(state: dict) -> dict:
@@ -84,7 +75,7 @@ def order_identify(state: dict) -> dict:
                 {"role": "system", "content": "从消息中提取订单号，返回JSON: {\"order_id\": \"...\"}。如果没有订单号返回空字符串。"},
                 {"role": "user", "content": last_msg},
             ])
-            result = _parse_json(response.content)
+            result = parse_json_response(response.content)
             order_id = result.get("order_id", "")
         except Exception as e:
             logger.error(f"LLM提取订单号失败: {e}")
