@@ -62,12 +62,8 @@ def subgraph_output_router(state: dict) -> dict:
             updates["human_review_reason"] = "澄清次数超过上限，转人工处理"
             return updates
 
-    # 优先级3: 降级处理 - 标记fallback
-    has_fallback = False
-    for f in agent_findings:
-        if f.get("result_type") == "fallback":
-            f["use_preset"] = True
-            has_fallback = True
+    # 优先级3: 降级处理 - 标记fallback（不原地修改 agent_findings）
+    has_fallback = any(f.get("result_type") == "fallback" for f in agent_findings)
 
     if has_fallback:
         updates["is_fallback"] = True
