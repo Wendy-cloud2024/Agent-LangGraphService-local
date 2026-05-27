@@ -14,7 +14,7 @@ import logging
 
 from langchain_openai import ChatOpenAI
 
-from src.config.settings import ADAPTER_MODEL
+from src.config.settings import ADAPTER_MODEL, LLM_BASE_URL
 from src.config.prompts import TONE_ADAPTER_PROMPT
 from src.utils.observability import TraceTimer, trace
 
@@ -35,7 +35,7 @@ def tone_adapter(state: dict) -> dict:
                                    timer.elapsed_ms(), {"action": "empty_input"})],
         }
 
-    llm = ChatOpenAI(model=ADAPTER_MODEL, temperature=0.3)
+    llm = ChatOpenAI(model=ADAPTER_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
     try:
         prompt = TONE_ADAPTER_PROMPT.format(
             emotion=state.get("emotion", "neutral"),

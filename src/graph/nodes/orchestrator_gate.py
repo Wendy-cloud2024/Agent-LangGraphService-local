@@ -27,6 +27,7 @@ from src.config.settings import (
     INTENT_CATEGORIES,
     INTENT_TO_SUBGRAPH,
     HISTORY_WINDOW_ROUNDS,
+    LLM_BASE_URL,
 )
 from src.config.prompts import (
     INTENT_CLASSIFICATION_PROMPT,
@@ -66,6 +67,13 @@ def _parse_json_response(content: str) -> dict:
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
     if match:
         content = match.group(1).strip()
+    else:
+        # 尝试提取第一个 { ... } 块
+        match = re.search(r"\{[\s\S]*\}", content)
+        if match:
+            content = match.group(0)
+    # DeepSeek有时返回 {{ }} 转义花括号，替换为单花括号
+    content = content.replace("{{", "{").replace("}}", "}")
     try:
         return json.loads(content)
     except json.JSONDecodeError:
@@ -165,7 +173,7 @@ def orchestrator_gate(state: dict) -> dict:
     # ============================================================
     # ③④⑤⑥⑦⑧ 需要LLM的处理步骤
     # ============================================================
-    llm = ChatOpenAI(model=CLASSIFIER_MODEL, temperature=0)
+    llm = ChatOpenAI(model=CLASSIFIER_MODEL, temperature=0, base_url=LLM_BASE_URL)
 
     # ④ 语言检测（规则匹配，不需要LLM）
     updates["language"] = _detect_language(customer_text)

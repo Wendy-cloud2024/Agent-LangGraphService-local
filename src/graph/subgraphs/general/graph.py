@@ -20,7 +20,7 @@ from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 
-from src.config.settings import GENERATOR_MODEL, EMOTION_INTENSITY_THRESHOLD
+from src.config.settings import GENERATOR_MODEL, LLM_BASE_URL, EMOTION_INTENSITY_THRESHOLD
 from src.state.schema import GeneralState, RESULT_TYPE_NORMAL, ESCALATE_TO_COMPLAINT
 from src.utils.observability import TraceTimer, trace
 
@@ -73,7 +73,7 @@ def faq_matcher(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0).bind_tools([search_faq])
+        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0, base_url=LLM_BASE_URL).bind_tools([search_faq])
         response = llm.invoke([{"role": "user", "content": last_msg}])
         # 尝试从tool_calls获取结果
         if hasattr(response, "tool_calls") and response.tool_calls:
@@ -104,7 +104,7 @@ def policy_search_node(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0).bind_tools([search_policy])
+        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0, base_url=LLM_BASE_URL).bind_tools([search_policy])
         response = llm.invoke([{"role": "user", "content": last_msg}])
         if hasattr(response, "tool_calls") and response.tool_calls:
             for tc in response.tool_calls:
@@ -146,7 +146,7 @@ def general_respond(state: dict) -> dict:
     context = "\n".join(context_parts) if context_parts else "未找到相关信息，请用通用方式回复。"
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3)
+        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
         prompt = f"""根据以下信息回答客户的问题。
 如果FAQ或政策中有相关信息，请使用。
 如果没有直接匹配的信息，请友好地告知客户并建议转人工客服。

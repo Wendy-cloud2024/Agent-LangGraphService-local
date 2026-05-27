@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 
 from src.config.settings import (
     CLASSIFIER_MODEL,
+    LLM_BASE_URL,
     QUALITY_SCORE_LOW,
     QUALITY_SCORE_CRITICAL,
     QUALITY_SCORE_REPROCESS,
@@ -36,6 +37,11 @@ def _parse_json_response(content: str) -> dict:
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
     if match:
         content = match.group(1).strip()
+    else:
+        match = re.search(r"\{[\s\S]*\}", content)
+        if match:
+            content = match.group(0)
+    content = content.replace("{{", "{").replace("}}", "}")
     try:
         return json.loads(content)
     except json.JSONDecodeError:
@@ -60,7 +66,7 @@ def output_gate(state: dict) -> dict:
     risk_level = "low"
     llm_flags = []
     try:
-        llm = ChatOpenAI(model=CLASSIFIER_MODEL, temperature=0)
+        llm = ChatOpenAI(model=CLASSIFIER_MODEL, temperature=0, base_url=LLM_BASE_URL)
         prompt = OUTPUT_GATE_PROMPT.format(
             draft_response=draft,
             intent_labels=json.dumps(state.get("intent_labels", []), ensure_ascii=False),

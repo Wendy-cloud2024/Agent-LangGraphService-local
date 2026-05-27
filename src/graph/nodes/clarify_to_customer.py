@@ -15,7 +15,7 @@ import logging
 
 from langchain_openai import ChatOpenAI
 
-from src.config.settings import GENERATOR_MODEL
+from src.config.settings import GENERATOR_MODEL, LLM_BASE_URL
 from src.config.prompts import CLARIFICATION_PROMPT
 from src.utils.safety import basic_safety_check
 from src.utils.observability import TraceTimer, trace
@@ -35,7 +35,7 @@ def clarify_to_customer(state: dict) -> dict:
 
     # 生成追问消息
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3)
+        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
         prompt = CLARIFICATION_PROMPT.format(
             question=question,
             required_info=required_info,

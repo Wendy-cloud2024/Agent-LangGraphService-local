@@ -22,7 +22,7 @@ import logging
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 
-from src.config.settings import GENERATOR_MODEL
+from src.config.settings import GENERATOR_MODEL, LLM_BASE_URL
 from src.state.schema import InSalesState, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
 from src.tools.ecommerce_tools import (
     get_order_details, track_shipment, check_payment_status,
@@ -79,7 +79,7 @@ def order_identify(state: dict) -> dict:
     # LLM提取
     if not order_id:
         try:
-            llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0)
+            llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0, base_url=LLM_BASE_URL)
             response = llm.invoke([
                 {"role": "system", "content": "从消息中提取订单号，返回JSON: {\"order_id\": \"...\"}。如果没有订单号返回空字符串。"},
                 {"role": "user", "content": last_msg},
@@ -256,7 +256,7 @@ def insales_respond(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
 
     try:
-        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3)
+        llm = ChatOpenAI(model=GENERATOR_MODEL, temperature=0.3, base_url=LLM_BASE_URL)
         prompt = f"""根据以下信息回答客户的订单查询:
 
 订单信息: {json.dumps(order_info, ensure_ascii=False)}
