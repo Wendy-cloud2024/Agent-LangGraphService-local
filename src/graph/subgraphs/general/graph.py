@@ -211,13 +211,6 @@ def emotion_monitor(state: dict) -> dict:
 
 # ==================== 子图构建 ====================
 
-def _route_after_respond(state: dict) -> str:
-    """general_respond后的路由: 检查是否需要情绪升级"""
-    if state.get("emotion_escalate"):
-        return END
-    return "emotion_monitor"
-
-
 def build_general_subgraph() -> StateGraph:
     """构建通用Agent子图"""
     graph = StateGraph(GeneralState)
