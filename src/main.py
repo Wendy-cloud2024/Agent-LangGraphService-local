@@ -23,6 +23,16 @@ from src.utils.observability import generate_trace_id
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# 模块级单例：只编译一次图，避免每次对话重复编译
+_app = None
+
+
+def _get_app():
+    global _app
+    if _app is None:
+        _app = compile_supervisor_graph()
+    return _app
+
 
 def run_conversation(
     customer_id: str,
@@ -40,8 +50,7 @@ def run_conversation(
 
     返回: 最终状态
     """
-    # 编译图
-    app = compile_supervisor_graph()
+    app = _get_app()
 
     # 创建线程ID
     if not thread_id:
@@ -83,7 +92,7 @@ def interactive_mode():
     print(f"\n会话ID: {thread_id}")
     print("-" * 40)
 
-    app = compile_supervisor_graph()
+    app = _get_app()
 
     while True:
         try:
