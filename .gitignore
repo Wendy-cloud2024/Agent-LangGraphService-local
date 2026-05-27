@@ -52,3 +52,12 @@ Desktop.ini
 
 # mypy
 .mypy_cache/
+
+# Claude Code
+.claude/
+
+# Project
+*.log
+conversation-*.txt
+
+conversation/*.txt
