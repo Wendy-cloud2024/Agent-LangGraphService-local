@@ -53,8 +53,10 @@ def check_harmful_content(text: str) -> tuple[bool, list[str]]:
     检测: 辱骂、歧视、暴力、色情关键词
     """
     harmful_patterns = [
-        (r"(傻瓜|笨蛋|白痴|蠢)", "insult"),
-        (r"(死|杀|打|砍|捅)", "violence"),
+        # 辱骂: 使用完整词语匹配，避免误判"打死也不买"等正常表达
+        (r"(你是个?(傻瓜|笨蛋|白痴|蠢货|废物|垃圾))", "insult"),
+        # 暴力: 匹配带有攻击意图的表达，排除"打折""杀价"等
+        (r"(杀了?你|打死你|砍死|捅刀|去死|弄死)", "violence"),
     ]
     flags = []
     for pattern, category in harmful_patterns:
