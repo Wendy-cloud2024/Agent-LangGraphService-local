@@ -21,6 +21,7 @@ import json
 import logging
 
 from langgraph.graph import StateGraph, END
+from langgraph.types import interrupt
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
@@ -199,12 +200,25 @@ def approval_gate(state: dict) -> dict:
     plan = state.get("resolution_plan") or {}
     severity = state.get("complaint_severity", "medium")
 
-    # 只有严重度较高或补偿金额较大才需要人工审批
+    # 只有严重度较低且补偿金额小才自动通过
     if severity in ("low",) and plan.get("compensation_value", 0) <= 50:
         result = {"approved": True, "approved_by": "auto"}
     else:
-        # 需要人工审批 - 实际使用interrupt()
-        result = {"approved": True, "approved_by": "pending_human", "plan": plan}
+        # 需要人工审批 - 暂停执行等待人工决策
+        approval_info = {
+            "plan": plan,
+            "severity": severity,
+            "compensation_value": plan.get("compensation_value", 0),
+            "complaint_type": state.get("complaint_type", ""),
+        }
+        decision = interrupt(approval_info)
+        approved = decision.get("approved", False)
+        result = {
+            "approved": approved,
+            "approved_by": "human",
+            "plan": plan,
+            "human_note": decision.get("note", ""),
+        }
 
     return {
         "approval_result": result,
