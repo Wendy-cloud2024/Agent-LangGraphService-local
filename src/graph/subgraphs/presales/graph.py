@@ -15,6 +15,8 @@
 输出类型: normal | clarification (商品不明确时)
 """
 
+import json
+import re
 import logging
 
 from langgraph.graph import StateGraph, END
@@ -64,7 +66,6 @@ def product_lookup(state: dict) -> dict:
                 {"role": "system", "content": "从客户消息中提取商品名称或关键词，返回JSON: {\"product_name\": \"...\", \"keywords\": [...]}"},
                 {"role": "user", "content": last_msg},
             ])
-            import json, re
             match = re.search(r"```(?:json)?\s*([\s\S]*?)```", response.content)
             content = match.group(1).strip() if match else response.content
             try:
@@ -146,7 +147,6 @@ def recommendation_engine(state: dict) -> dict:
 
 返回JSON: {{"recommendations": [{{"name": "...", "reason": "..."}}]}}"""
         response = llm.invoke([{"role": "user", "content": prompt}])
-        import json, re
         match = re.search(r"```(?:json)?\s*([\s\S]*?)```", response.content)
         content = match.group(1).strip() if match else response.content
         result = json.loads(content)
