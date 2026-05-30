@@ -14,11 +14,15 @@ import logging
 # 确保src目录在Python路径中
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+
 from langchain_core.messages import HumanMessage
 
 from src.graph.supervisor import compile_supervisor_graph
 from src.state.schema import create_initial_state
 from src.utils.observability import generate_trace_id
+from src.tools.result_logger import log_invoke_result, log_execution_path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -72,6 +76,8 @@ def run_conversation(
 
     try:
         result = app.invoke(initial_state, config)
+        log_invoke_result(result)
+        log_execution_path(result)
         return result
     except Exception as e:
         logger.error(f"对话执行失败: {e}", exc_info=True)
@@ -121,6 +127,9 @@ def interactive_mode():
 
         try:
             result = app.invoke(initial_state, config)
+            log_invoke_result(result)
+            log_execution_path(result)
+
             draft = result.get("draft_response", "") or result.get("merged_content", "")
             if draft:
                 print(f"\n客服: {draft}")

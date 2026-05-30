@@ -16,11 +16,11 @@ import os
 # DeepSeek API基础URL (兼容OpenAI格式)
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
 # 意图分类和情感检测使用较快的模型
-CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "deepseek-chat")
+CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "deepseek-v4-flash")
 # 响应生成使用高质量模型
-GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "deepseek-chat")
+GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "deepseek-v4-flash")
 # 语气适配使用中等模型
-ADAPTER_MODEL = os.getenv("ADAPTER_MODEL", "deepseek-chat")
+ADAPTER_MODEL = os.getenv("ADAPTER_MODEL", "deepseek-v4-flash")
 
 # ==================== 风险阈值 ====================
 # 金额阈值: 超过此金额的操作需要人工审批
