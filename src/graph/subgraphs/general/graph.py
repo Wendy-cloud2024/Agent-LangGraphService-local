@@ -21,7 +21,7 @@ from langchain_core.tools import tool
 
 from src.config.settings import GENERATOR_MODEL, EMOTION_INTENSITY_THRESHOLD
 from src.config.llm import create_llm
-from src.state.schema import GeneralState, RESULT_TYPE_NORMAL, ESCALATE_TO_COMPLAINT
+from src.state.schema import GeneralState, SubgraphOutput, RESULT_TYPE_NORMAL, ESCALATE_TO_COMPLAINT
 from src.utils.observability import TraceTimer, trace
 
 logger = logging.getLogger(__name__)
@@ -165,7 +165,7 @@ def general_respond(state: dict) -> dict:
 
     return {
         "result_type": RESULT_TYPE_NORMAL,
-        "findings": {
+        "_findings": {
             "answer": answer,
             "faq_matched": faq is not None and faq.get("answer") != "未找到匹配的FAQ",
             "policy_matched": policy is not None and policy.get("matched") != "none",
@@ -201,7 +201,17 @@ def emotion_monitor(state: dict) -> dict:
             escalate = True
             signal = ESCALATE_TO_COMPLAINT
 
+    # 从 general_respond 读取内部 findings
+    inner_findings = state.get("_findings") or {}
+
     return {
+        "agent_findings": [{
+            "source_agent": "general_agent",
+            "result_type": state.get("result_type", RESULT_TYPE_NORMAL),
+            "findings": inner_findings,
+            "clarification_request": None,
+            "escalate_signal": signal,
+        }],
         "emotion_escalate": escalate,
         "escalate_signal": signal,
         "trace_events": [trace(trace_id, "emotion_monitor", "completed",
@@ -213,7 +223,7 @@ def emotion_monitor(state: dict) -> dict:
 
 def build_general_subgraph() -> StateGraph:
     """构建通用Agent子图"""
-    graph = StateGraph(GeneralState)
+    graph = StateGraph(GeneralState, output=SubgraphOutput)
 
     graph.add_node("faq_matcher", faq_matcher)
     graph.add_node("policy_search", policy_search_node)

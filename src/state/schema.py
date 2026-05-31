@@ -128,9 +128,9 @@ class AgentSubgraphState(TypedDict):
     # supervisor注入的相关历史
     relevant_history: list[dict]
 
-    # 子图输出
+    # 子图输出 → 向监督者传递（写入 agent_findings 由 reducer 聚合）
+    agent_findings: Annotated[list[dict], operator.add]   # [{source_agent, result_type, findings, clarification_request, escalate_signal, ...}]
     result_type: str                          # normal/clarification/fallback
-    findings: dict                            # 子图发现
     clarification_request: dict | None        # 澄清请求
     fallback_reason: str | None               # 降级原因
     fallback_message: str | None              # 降级预置话术
@@ -142,6 +142,14 @@ class AgentSubgraphState(TypedDict):
     # 观测
     trace_events: Annotated[list[dict], operator.add]
     trace_id: str
+
+
+# ==================== 子图输出Schema（控制回传给监督者的字段）====================
+class SubgraphOutput(TypedDict):
+    """子图向监督者回传的字段，避免 session_id 等标量字段冲突"""
+    agent_findings: Annotated[list[dict], operator.add]
+    tool_calls_made: Annotated[list[dict], operator.add]
+    trace_events: Annotated[list[dict], operator.add]
 
 
 # ==================== 售前子图状态 ====================
@@ -192,6 +200,7 @@ class GeneralState(AgentSubgraphState):
     faq_result: dict | None                   # FAQ匹配结果
     policy_result: dict | None                # 政策检索结果
     emotion_escalate: bool                    # 是否检测到情绪升级
+    _findings: dict                           # general_respond → emotion_monitor 内部传递
 
 
 # ==================== 子图输出类型常量 ====================

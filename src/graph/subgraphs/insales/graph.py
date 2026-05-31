@@ -23,7 +23,7 @@ from langgraph.graph import StateGraph, END
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
-from src.state.schema import InSalesState, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
+from src.state.schema import InSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
 from src.tools.ecommerce_tools import (
     get_order_details, track_shipment, check_payment_status,
     update_shipping_address, retry_payment,
@@ -227,14 +227,21 @@ def insales_respond(state: dict) -> dict:
 
     order_info = state.get("order_info")
     if not order_info or not order_info.get("order_id"):
+        clarification = {
+            "question": "请提供您的订单号，以便我查询订单信息。",
+            "required_info": "order_id",
+            "context": {},
+        }
         return {
+            "agent_findings": [{
+                "source_agent": "insales_agent",
+                "result_type": RESULT_TYPE_CLARIFICATION,
+                "findings": {},
+                "clarification_request": clarification,
+                "escalate_signal": None,
+            }],
             "result_type": RESULT_TYPE_CLARIFICATION,
-            "clarification_request": {
-                "question": "请提供您的订单号，以便我查询订单信息。",
-                "required_info": "order_id",
-                "context": {},
-            },
-            "findings": {},
+            "clarification_request": clarification,
             "escalate_signal": None,
             "trace_events": [trace(trace_id, "insales_respond", "completed",
                                    timer.elapsed_ms(), {"action": "clarification"})],
@@ -265,12 +272,18 @@ def insales_respond(state: dict) -> dict:
         answer = "抱歉，暂时无法查询订单信息，请稍后再试。"
 
     return {
+        "agent_findings": [{
+            "source_agent": "insales_agent",
+            "result_type": RESULT_TYPE_NORMAL,
+            "findings": {
+                "answer": answer,
+                "order_id": order_info.get("order_id", ""),
+                "order_status": order_info.get("status", ""),
+            },
+            "clarification_request": None,
+            "escalate_signal": None,
+        }],
         "result_type": RESULT_TYPE_NORMAL,
-        "findings": {
-            "answer": answer,
-            "order_id": order_info.get("order_id", ""),
-            "order_status": order_info.get("status", ""),
-        },
         "clarification_request": None,
         "escalate_signal": None,
         "trace_events": [trace(trace_id, "insales_respond", "completed", timer.elapsed_ms())],
@@ -279,7 +292,7 @@ def insales_respond(state: dict) -> dict:
 
 def build_insales_subgraph() -> StateGraph:
     """构建售中Agent子图"""
-    graph = StateGraph(InSalesState)
+    graph = StateGraph(InSalesState, output=SubgraphOutput)
 
     graph.add_node("order_identify", order_identify)
     graph.add_node("order_fetch", order_fetch)

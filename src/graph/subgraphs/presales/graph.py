@@ -24,7 +24,7 @@ from langchain_core.tools import tool
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
-from src.state.schema import PreSalesState, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
+from src.state.schema import PreSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
 from src.tools.ecommerce_tools import check_inventory, find_promotions, search_knowledge_base
 from src.tools.vision_tools import visual_product_match
 from src.utils.observability import TraceTimer, trace
@@ -202,14 +202,21 @@ def presales_respond(state: dict) -> dict:
 
     # 检查是否需要澄清（商品不明确）
     if not product_info or (isinstance(product_info, dict) and not product_info.get("sku") and not product_info.get("product_name")):
+        clarification = {
+            "question": "请问您想了解哪款商品？可以提供商品名称或链接。",
+            "required_info": "product_name",
+            "context": {},
+        }
         return {
+            "agent_findings": [{
+                "source_agent": "presales_agent",
+                "result_type": RESULT_TYPE_CLARIFICATION,
+                "findings": {},
+                "clarification_request": clarification,
+                "escalate_signal": None,
+            }],
             "result_type": RESULT_TYPE_CLARIFICATION,
-            "clarification_request": {
-                "question": "请问您想了解哪款商品？可以提供商品名称或链接。",
-                "required_info": "product_name",
-                "context": {},
-            },
-            "findings": {},
+            "clarification_request": clarification,
             "escalate_signal": None,
             "trace_events": [trace(trace_id, "presales_respond", "completed",
                                    timer.elapsed_ms(), {"action": "clarification"})],
@@ -236,13 +243,19 @@ def presales_respond(state: dict) -> dict:
         answer = "抱歉，暂时无法获取商品信息，请稍后再试。"
 
     return {
+        "agent_findings": [{
+            "source_agent": "presales_agent",
+            "result_type": RESULT_TYPE_NORMAL,
+            "findings": {
+                "answer": answer,
+                "product": product_info,
+                "in_stock": inventory.get("available", False),
+                "promotions": promotions,
+            },
+            "clarification_request": None,
+            "escalate_signal": None,
+        }],
         "result_type": RESULT_TYPE_NORMAL,
-        "findings": {
-            "answer": answer,
-            "product": product_info,
-            "in_stock": inventory.get("available", False),
-            "promotions": promotions,
-        },
         "clarification_request": None,
         "escalate_signal": None,
         "trace_events": [trace(trace_id, "presales_respond", "completed", timer.elapsed_ms())],
@@ -253,7 +266,7 @@ def presales_respond(state: dict) -> dict:
 
 def build_presales_subgraph() -> StateGraph:
     """构建售前Agent子图"""
-    graph = StateGraph(PreSalesState)
+    graph = StateGraph(PreSalesState, output=SubgraphOutput)
 
     graph.add_node("product_lookup", product_lookup)
     graph.add_node("knowledge_search", knowledge_search_node)

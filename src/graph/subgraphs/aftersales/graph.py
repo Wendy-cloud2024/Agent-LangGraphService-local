@@ -26,7 +26,7 @@ from langgraph.graph import StateGraph, END
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
-from src.state.schema import AfterSalesState, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
+from src.state.schema import AfterSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
 from src.tools.ecommerce_tools import (
     get_order_details, check_return_eligibility, check_warranty_status,
     get_customer_orders, send_return_label, issue_store_credit,
@@ -280,14 +280,21 @@ def aftersales_respond(state: dict) -> dict:
     # 检查是否需要澄清（证据不足）
     if not eligibility or (not evidence and plan.get("resolution") != "denied"):
         required = "order_id" if not state.get("order_info") else "evidence"
+        clarification = {
+            "question": "请提供您的订单号和相关照片证据，以便我为您处理。",
+            "required_info": required,
+            "context": {"issue_type": issue_type},
+        }
         return {
+            "agent_findings": [{
+                "source_agent": "aftersales_agent",
+                "result_type": RESULT_TYPE_CLARIFICATION,
+                "findings": {},
+                "clarification_request": clarification,
+                "escalate_signal": None,
+            }],
             "result_type": RESULT_TYPE_CLARIFICATION,
-            "clarification_request": {
-                "question": "请提供您的订单号和相关照片证据，以便我为您处理。",
-                "required_info": required,
-                "context": {"issue_type": issue_type},
-            },
-            "findings": {},
+            "clarification_request": clarification,
             "escalate_signal": None,
             "trace_events": [trace(trace_id, "aftersales_respond", "completed",
                                    timer.elapsed_ms(), {"action": "clarification"})],
@@ -314,13 +321,19 @@ def aftersales_respond(state: dict) -> dict:
         answer = "抱歉，处理您的请求时遇到了问题，请稍后再试。"
 
     return {
+        "agent_findings": [{
+            "source_agent": "aftersales_agent",
+            "result_type": RESULT_TYPE_NORMAL,
+            "findings": {
+                "answer": answer,
+                "issue_type": issue_type,
+                "resolution": plan.get("resolution", ""),
+                "eligible": eligibility.get("eligible", False),
+            },
+            "clarification_request": None,
+            "escalate_signal": None,
+        }],
         "result_type": RESULT_TYPE_NORMAL,
-        "findings": {
-            "answer": answer,
-            "issue_type": issue_type,
-            "resolution": plan.get("resolution", ""),
-            "eligible": eligibility.get("eligible", False),
-        },
         "clarification_request": None,
         "escalate_signal": None,
         "trace_events": [trace(trace_id, "aftersales_respond", "completed", timer.elapsed_ms())],
@@ -329,7 +342,7 @@ def aftersales_respond(state: dict) -> dict:
 
 def build_aftersales_subgraph() -> StateGraph:
     """构建售后Agent子图"""
-    graph = StateGraph(AfterSalesState)
+    graph = StateGraph(AfterSalesState, output=SubgraphOutput)
 
     graph.add_node("issue_identify", issue_identify)
     graph.add_node("order_fetch", order_fetch)

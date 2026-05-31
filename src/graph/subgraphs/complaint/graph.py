@@ -25,7 +25,7 @@ from langgraph.types import interrupt
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
-from src.state.schema import ComplaintState, RESULT_TYPE_NORMAL, ESCALATE_TO_HUMAN
+from src.state.schema import ComplaintState, SubgraphOutput, RESULT_TYPE_NORMAL, ESCALATE_TO_HUMAN
 from src.tools.ecommerce_tools import get_customer_orders, apply_compensation, get_order_details
 from src.tools.vision_tools import detect_quality_issue
 from src.utils.observability import TraceTimer, trace
@@ -261,13 +261,19 @@ def complaint_respond(state: dict) -> dict:
         answer = "非常抱歉给您带来了不好的体验，我们会尽快处理您的投诉。"
 
     return {
+        "agent_findings": [{
+            "source_agent": "complaint_agent",
+            "result_type": RESULT_TYPE_NORMAL,
+            "findings": {
+                "answer": answer,
+                "complaint_type": state.get("complaint_type", ""),
+                "severity": state.get("complaint_severity", ""),
+                "resolution": plan.get("resolution", ""),
+            },
+            "clarification_request": None,
+            "escalate_signal": None,
+        }],
         "result_type": RESULT_TYPE_NORMAL,
-        "findings": {
-            "answer": answer,
-            "complaint_type": state.get("complaint_type", ""),
-            "severity": state.get("complaint_severity", ""),
-            "resolution": plan.get("resolution", ""),
-        },
         "clarification_request": None,
         "escalate_signal": None,
         "trace_events": [trace(trace_id, "complaint_respond", "completed", timer.elapsed_ms())],
@@ -285,7 +291,7 @@ def _route_after_classifier(state: dict) -> str:
 
 def build_complaint_subgraph() -> StateGraph:
     """构建投诉Agent子图"""
-    graph = StateGraph(ComplaintState)
+    graph = StateGraph(ComplaintState, output=SubgraphOutput)
 
     graph.add_node("complaint_classifier", complaint_classifier)
     graph.add_node("context_gatherer", context_gatherer)
