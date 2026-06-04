@@ -33,5 +33,16 @@ def respond_to_customer(state: dict) -> dict:
                                {"response_length": len(draft)})],
     }
 
+    # Layer 4: 对话结束时更新客户画像
+    try:
+        from src.memory.customer_store import get_customer_store
+        customer_id = state.get("customer_id", "")
+        if customer_id:
+            store = get_customer_store()
+            updated_profile = store.update_from_interaction(customer_id, state)
+            updates["customer_profile"] = updated_profile
+    except Exception as e:
+        logger.warning("更新客户画像失败: %s", e)
+
     logger.info(f"[{trace_id}] 回复客户: {draft[:100]}...")
     return updates

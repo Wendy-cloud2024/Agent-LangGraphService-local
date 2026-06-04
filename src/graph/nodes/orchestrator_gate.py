@@ -60,6 +60,10 @@ def _match_human_transfer(text: str) -> bool:
     return False
 
 
+# ==================== 记忆配置 ====================
+MAX_MESSAGES_WINDOW = 20  # 工作记忆窗口: 保留最近20条消息
+
+
 def orchestrator_gate(state: dict) -> dict:
     """统一入口关卡
 
@@ -79,9 +83,28 @@ def orchestrator_gate(state: dict) -> dict:
     updates = {}
 
     # ============================================================
+    # Layer 1: 工作记忆窗口截断
+    # ============================================================
+    if len(messages) > MAX_MESSAGES_WINDOW:
+        logger.info(f"[{trace_id}] 消息窗口截断: {len(messages)} → {MAX_MESSAGES_WINDOW}")
+        updates["messages"] = messages[-MAX_MESSAGES_WINDOW:]
+
+    # ============================================================
     # ⓪ 前置状态检查: 澄清重入
     # ============================================================
     if state.get("pending_clarification"):
+        # 恢复澄清前保存的累积状态
+        acc = state.get("pending_accumulated_state", {})
+        if acc:
+            updates["intent_labels"] = acc.get("intent_labels", [])
+            updates["emotion"] = acc.get("emotion", "neutral")
+            updates["customer_tier"] = acc.get("customer_tier", "standard")
+            logger.info(f"[{trace_id}] 恢复澄清前状态: intent={updates.get('intent_labels')}, "
+                        f"emotion={updates.get('emotion')}")
+
+        # 清除澄清标记
+        updates["pending_clarification"] = False
+
         logger.info(f"[{trace_id}] 检测到pending_clarification, 跳过全部分诊, 路由到 {state.get('pending_subgraph')}")
         updates["trace_events"] = [trace(trace_id, "orchestrator_gate", "completed",
                                          timer.elapsed_ms(),
@@ -156,6 +179,14 @@ def orchestrator_gate(state: dict) -> dict:
 
     # ④ 语言检测（规则匹配，不需要LLM）
     updates["language"] = _detect_language(customer_text)
+
+    # ⑤ 对话摘要压缩 (Layer 3 记忆)
+    from src.utils.summarizer import summarize_messages
+    current_messages = updates.get("messages", messages)
+    compressed = summarize_messages(current_messages)
+    if len(compressed) != len(current_messages):
+        updates["messages"] = compressed
+        logger.info(f"[{trace_id}] 对话摘要压缩: {len(current_messages)} → {len(compressed)}")
 
     # ⑥⑦ 合并: 多维标签分类 + 情感检测（单次LLM调用）
     combined_result = {}

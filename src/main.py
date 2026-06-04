@@ -62,12 +62,21 @@ def run_conversation(
 
     trace_id = generate_trace_id()
 
+    # 加载客户画像 (Layer 4 记忆)
+    from src.memory.customer_store import get_customer_store
+    store = get_customer_store()
+    customer_profile = store.load(customer_id)
+    # 如果画像中有等级且未显式指定，使用画像中的等级
+    if customer_tier == "standard" and customer_profile.get("tier"):
+        customer_tier = customer_profile["tier"]
+
     # 创建初始状态
     initial_state = create_initial_state(
         session_id=thread_id,
         customer_id=customer_id,
         customer_tier=customer_tier,
     )
+    initial_state["customer_profile"] = customer_profile
     initial_state["trace_id"] = trace_id
     initial_state["messages"] = [HumanMessage(content=message)]
 

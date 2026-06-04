@@ -50,6 +50,16 @@ def escalate_to_human(state: dict) -> dict:
     if human_feedback:
         summary += f"\n人工审核员反馈: {human_feedback}"
 
+    # 加入客户画像信息 (Layer 4 记忆)
+    customer_profile = state.get("customer_profile", {})
+    if customer_profile and customer_profile.get("interaction_count", 0) > 0:
+        summary += f"\n\n客户画像: 交互{customer_profile.get('interaction_count', 0)}次"
+        summary += f", 等级={customer_profile.get('tier', '')}"
+        summary += f", 频繁话题={customer_profile.get('frequent_topics', [])}"
+        issues = customer_profile.get("issue_history", [])
+        if issues:
+            summary += f", 历史问题{len(issues)}条"
+
     # 判断是否为接管模式
     is_takeover = state.get("human_decision") == "takeover"
 

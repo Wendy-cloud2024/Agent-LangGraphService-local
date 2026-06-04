@@ -53,17 +53,18 @@ def build_supervisor_graph() -> StateGraph:
     from src.graph.subgraphs.aftersales.graph import compile_aftersales_subgraph
     from src.graph.subgraphs.complaint.graph import compile_complaint_subgraph
     from src.graph.subgraphs.general.graph import compile_general_subgraph
+    from src.graph.nodes.context_wrapper import create_subgraph_node
 
     # 售前子图: 商品查询/库存查询/推荐/优惠匹配, 含visual_product_match专项视觉工具
-    graph.add_node("presales_agent", compile_presales_subgraph())
+    graph.add_node("presales_agent", create_subgraph_node("presales_agent", compile_presales_subgraph()))
     # 售中子图: 订单查询/物流追踪/支付信息/操作执行, 含ocr_shipping_label专项视觉工具
-    graph.add_node("insales_agent", compile_insales_subgraph())
+    graph.add_node("insales_agent", create_subgraph_node("insales_agent", compile_insales_subgraph()))
     # 售后子图: 退换货/退款/保修, 含detect_product_damage + ocr_product_label专项视觉工具
-    graph.add_node("aftersales_agent", compile_aftersales_subgraph())
+    graph.add_node("aftersales_agent", create_subgraph_node("afters_agent", compile_aftersales_subgraph()))
     # 投诉子图: 最高优先级, 不降级, 异常直接escalate_to_human, 含detect_quality_issue
-    graph.add_node("complaint_agent", compile_complaint_subgraph())
+    graph.add_node("complaint_agent", create_subgraph_node("complaint_agent", compile_complaint_subgraph()))
     # 通用子图: FAQ/政策问答, 含emotion_monitor可发出escalate_to_complaint信号
-    graph.add_node("general_agent", compile_general_subgraph())
+    graph.add_node("general_agent", create_subgraph_node("general_agent", compile_general_subgraph()))
 
     # 【中间处理节点】
     # 子图输出统一路由器: 按优先级依次检查所有子图输出
