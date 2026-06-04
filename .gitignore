@@ -59,5 +59,13 @@ Desktop.ini
 # Project
 *.log
 conversation-*.txt
-
 conversation/*.txt
+
+# Database (生成文件，不含客户敏感数据)
+data/ecommerce.db
+data/customers/*.json
+
+# RAG index (生成文件)
+.chroma_db/
+index/bm25_cache.pkl
+index/file_hashes.json

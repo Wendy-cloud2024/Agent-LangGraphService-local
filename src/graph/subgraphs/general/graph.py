@@ -29,36 +29,39 @@ logger = logging.getLogger(__name__)
 
 # ==================== 工具定义 ====================
 
+def _rag_search(query: str, top_k: int = 3) -> list[tuple]:
+    """RAG 检索辅助函数"""
+    from src.rag import get_rag_retriever
+    retriever = get_rag_retriever()
+    return retriever.retrieve(query, top_k=top_k)
+
+
 @tool
 def search_faq(query: str) -> dict:
-    """搜索FAQ知识库"""
-    # Mock实现 - 实际项目中连接FAQ数据库
-    faq_db = {
-        "退货": {"answer": "自签收之日起7天内可申请退货，商品需保持原包装。", "category": "售后"},
-        "运费": {"answer": "订单满99元免运费，否则收取8元运费。", "category": "物流"},
-        "支付": {"answer": "支持微信、支付宝、银行卡等多种支付方式。", "category": "支付"},
-        "营业时间": {"answer": "在线客服7x24小时服务，电话客服9:00-21:00。", "category": "通用"},
-        "保修": {"answer": "电子产品享有1年保修期，配件享有6个月保修。", "category": "售后"},
-    }
-    for key, value in faq_db.items():
-        if key in query:
-            return value
-    return {"answer": "未找到匹配的FAQ", "category": "unknown"}
+    """搜索FAQ知识库（RAG 混合检索）"""
+    try:
+        results = _rag_search(query, top_k=3)
+        if results:
+            doc, score = results[0]
+            return {"answer": doc.content, "category": doc.metadata.get("category", "通用")}
+        return {"answer": "未找到匹配的FAQ", "category": "unknown"}
+    except Exception as e:
+        logger.error("FAQ RAG 检索失败: %s", e)
+        return {"answer": "未找到匹配的FAQ", "category": "unknown"}
 
 
 @tool
 def search_policy(query: str) -> dict:
-    """搜索店铺政策"""
-    policy_db = {
-        "退换货": "7天无理由退换，15天质量问题包换，1年保修。",
-        "配送": "全国包邮（偏远地区除外），标准配送2-5天，加急1-2天。",
-        "发票": "支持电子发票和纸质发票，下单时备注即可。",
-        "会员": "普通会员积分1倍，VIP会员积分2倍，企业会员专属折扣。",
-    }
-    for key, value in policy_db.items():
-        if key in query:
-            return {"policy": value, "matched": key}
-    return {"policy": "请咨询人工客服获取详细政策信息。", "matched": "none"}
+    """搜索店铺政策（RAG 混合检索）"""
+    try:
+        results = _rag_search(query, top_k=3)
+        if results:
+            doc, score = results[0]
+            return {"policy": doc.content, "matched": doc.metadata.get("filename", "none")}
+        return {"policy": "请咨询人工客服获取详细政策信息。", "matched": "none"}
+    except Exception as e:
+        logger.error("Policy RAG 检索失败: %s", e)
+        return {"policy": "请咨询人工客服获取详细政策信息。", "matched": "none"}
 
 
 # ==================== 节点函数 ====================
