@@ -30,6 +30,7 @@ from src.tools.ecommerce_tools import get_customer_orders, apply_compensation, g
 from src.tools.vision_tools import detect_quality_issue
 from src.utils.observability import TraceTimer, trace
 from src.utils.parse import parse_json_response
+from src.utils.conversation import build_conversation_context
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +48,16 @@ def complaint_classifier(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0)
+        conversation_context = build_conversation_context(messages)
         response = llm.invoke([
-            {"role": "system", "content": """分类客户的投诉。
+            {"role": "system", "content": """分类客户的投诉。结合对话历史理解投诉背景。
 返回JSON: {
     "complaint_type": "product|service|logistics",
     "complaint_severity": "low|medium|high|critical",
     "keywords": ["关键词列表"],
     "summary": "投诉摘要"
 }"""},
+            *conversation_context,
             {"role": "user", "content": last_msg},
         ])
         result = parse_json_response(response.content)
@@ -128,12 +131,14 @@ def empathy_responder(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0.3)
+        conversation_context = build_conversation_context(messages)
         response = llm.invoke([
             {"role": "system", "content": f"""你是一个有同理心的客服代表。
 客户当前情感: {emotion}
 投诉类型: {complaint_type}
 
 请先表达对客户不满的理解和歉意，然后安抚客户情绪。回复要真诚、有同理心。"""},
+            *conversation_context,
             {"role": "user", "content": last_msg},
         ])
         empathy_text = response.content
@@ -162,6 +167,7 @@ def resolution_planner(state: dict) -> dict:
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0.3)
         context_str = json.dumps(context, ensure_ascii=False)[:500]
+        conversation_context = build_conversation_context(messages)
         response = llm.invoke([
             {"role": "system", "content": f"""根据投诉信息提出合理的补偿方案。
 
@@ -177,6 +183,7 @@ def resolution_planner(state: dict) -> dict:
 5. 道歉+小礼品
 
 返回JSON: {{\"resolution\": \"方案描述\", \"compensation_type\": \"类型\", \"compensation_value\": 0, \"reasoning\": \"理由\"}}"""},
+            *conversation_context,
             {"role": "user", "content": last_msg},
         ])
         plan = parse_json_response(response.content)
@@ -241,20 +248,26 @@ def complaint_respond(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0.3)
+        conversation_context = build_conversation_context(messages)
+
         prompt = f"""整合以下信息，回复客户的投诉:
 
 共情回应: {empathy}
 补偿方案: {json.dumps(plan, ensure_ascii=False)}
 审批状态: {json.dumps(approval, ensure_ascii=False)}
 
-客户消息: {last_msg}
-
 请回复客户，包含:
 1. 对客户不满的理解
 2. 问题分析和责任认定
 3. 具体补偿方案
-4. 后续改进措施"""
-        response = llm.invoke([{"role": "user", "content": prompt}])
+4. 后续改进措施
+注意：结合对话上下文，确保回复连贯。"""
+
+        response = llm.invoke([
+            {"role": "system", "content": prompt},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
         answer = response.content
     except Exception as e:
         logger.error(f"投诉回复生成失败: {e}")

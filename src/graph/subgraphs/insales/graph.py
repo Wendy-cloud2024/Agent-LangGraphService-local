@@ -31,6 +31,7 @@ from src.tools.ecommerce_tools import (
 from src.tools.vision_tools import ocr_shipping_label
 from src.utils.observability import TraceTimer, trace
 from src.utils.parse import parse_json_response
+from src.utils.conversation import build_conversation_context
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +48,18 @@ def order_identify(state: dict) -> dict:
 
     order_id = ""
 
-    # 尝试从文本提取订单号
+    # 尝试从所有最近消息中提取订单号（不仅限于最后一条）
+    all_recent_text = " ".join(
+        getattr(m, "content", "") for m in messages[-6:]
+        if getattr(m, "type", "") == "human"
+    )
     order_patterns = [
         r"ORD[\w-]+",
         r"订单号[：:]\s*([\w-]+)",
         r"order[_\s]?id[：:]\s*([\w-]+)",
     ]
     for pattern in order_patterns:
-        match = re.search(pattern, last_msg, re.IGNORECASE)
+        match = re.search(pattern, all_recent_text, re.IGNORECASE)
         if match:
             order_id = match.group(1) if match.lastindex else match.group(0)
             break
@@ -67,12 +72,18 @@ def order_identify(state: dict) -> dict:
         except Exception as e:
             logger.error(f"OCR物流面单失败: {e}")
 
-    # LLM提取
+    # LLM提取 — 传入对话历史以支持上下文推断
     if not order_id:
         try:
             llm = create_llm(GENERATOR_MODEL, temperature=0)
+            conversation_context = build_conversation_context(messages)
             response = llm.invoke([
-                {"role": "system", "content": "从消息中提取订单号，返回JSON: {\"order_id\": \"...\"}。如果没有订单号返回空字符串。"},
+                {"role": "system", "content": (
+                    "从消息和对话历史中提取订单号，返回JSON: {\"order_id\": \"...\"}。"
+                    "如果没有订单号返回空字符串。"
+                    "注意：订单号可能在之前的消息中提到过。"
+                )},
+                *conversation_context,
                 {"role": "user", "content": last_msg},
             ])
             result = parse_json_response(response.content)
@@ -173,11 +184,17 @@ def action_planner(state: dict) -> dict:
     messages = state.get("messages", [])
     last_msg = messages[-1].content if messages else ""
 
+    # 从最近对话中提取操作意图（不仅限于最后一条消息）
+    recent_human_text = " ".join(
+        getattr(m, "content", "") for m in messages[-6:]
+        if getattr(m, "type", "") == "human"
+    )
+
     plan = {"actions": [], "requires_approval": False}
 
-    if "地址" in last_msg and analysis.get("can_modify_address"):
+    if ("地址" in recent_human_text or "改地址" in recent_human_text) and analysis.get("can_modify_address"):
         plan["actions"].append({"type": "update_address", "risk": "medium"})
-    elif "取消" in last_msg and analysis.get("can_cancel"):
+    elif "取消" in recent_human_text and analysis.get("can_cancel"):
         plan["actions"].append({"type": "cancel_order", "risk": "high"})
         plan["requires_approval"] = True
     else:
@@ -255,6 +272,8 @@ def insales_respond(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0.3)
+        conversation_context = build_conversation_context(messages)
+
         prompt = f"""根据以下信息回答客户的订单查询:
 
 订单信息: {json.dumps(order_info, ensure_ascii=False)}
@@ -262,10 +281,14 @@ def insales_respond(state: dict) -> dict:
 支付信息: {json.dumps(payment, ensure_ascii=False)}
 操作结果: {json.dumps(action_result, ensure_ascii=False)}
 
-客户消息: {last_msg}
+请直接回复客户，包含订单状态、物流信息和操作结果。
+注意：如果客户的问题是追问，结合之前的对话上下文回答。"""
 
-请直接回复客户，包含订单状态、物流信息和操作结果。"""
-        response = llm.invoke([{"role": "user", "content": prompt}])
+        response = llm.invoke([
+            {"role": "system", "content": prompt},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
         answer = response.content
     except Exception as e:
         logger.error(f"售中回复生成失败: {e}")

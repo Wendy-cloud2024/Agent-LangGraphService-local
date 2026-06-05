@@ -35,6 +35,7 @@ from src.tools.ecommerce_tools import (
 from src.tools.vision_tools import detect_product_damage, ocr_product_label
 from src.utils.observability import TraceTimer, trace
 from src.utils.parse import parse_json_response
+from src.utils.conversation import build_conversation_context
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,11 @@ def issue_identify(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0)
+        conversation_context = build_conversation_context(messages)
         response = llm.invoke([
-            {"role": "system", "content": """分类客户的售后问题类型。
+            {"role": "system", "content": """分类客户的售后问题类型。结合对话历史理解客户意图。
 返回JSON: {"issue_type": "return|exchange|refund|warranty", "description": "...", "confidence": 0.9}"""},
+            *conversation_context,
             {"role": "user", "content": last_msg},
         ])
         result = parse_json_response(response.content)
@@ -78,9 +81,13 @@ def order_fetch(state: dict) -> dict:
     last_msg = messages[-1].content if messages else ""
     customer_id = state.get("customer_id", "")
 
-    # 提取订单号
+    # 从所有最近消息中提取订单号（不仅限于最后一条）
+    all_recent_text = " ".join(
+        getattr(m, "content", "") for m in messages[-6:]
+        if getattr(m, "type", "") == "human"
+    )
     order_id = ""
-    match = re.search(r"ORD[\w-]+|订单号[：:]\s*([\w-]+)", last_msg)
+    match = re.search(r"ORD[\w-]+|订单号[：:]\s*([\w-]+)", all_recent_text)
     if match:
         order_id = match.group(1) if match.lastindex else match.group(0)
 
@@ -300,9 +307,11 @@ def aftersales_respond(state: dict) -> dict:
                                    timer.elapsed_ms(), {"action": "clarification"})],
         }
 
-    # 生成回复
+    # 生成回复 — 传入对话历史保持上下文连贯
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0.3)
+        conversation_context = build_conversation_context(messages)
+
         prompt = f"""根据以下信息回复客户的售后请求:
 
 问题类型: {issue_type}
@@ -311,10 +320,14 @@ def aftersales_respond(state: dict) -> dict:
 操作结果: {json.dumps(tool_result, ensure_ascii=False)}
 证据: {len(evidence)}件
 
-客户消息: {last_msg}
+请直接回复客户，说明处理结果。如果操作需要审批，告知客户正在等待审批。
+注意：如果客户的问题是追问，结合之前的对话上下文回答。"""
 
-请直接回复客户，说明处理结果。如果操作需要审批，告知客户正在等待审批。"""
-        response = llm.invoke([{"role": "user", "content": prompt}])
+        response = llm.invoke([
+            {"role": "system", "content": prompt},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
         answer = response.content
     except Exception as e:
         logger.error(f"售后回复生成失败: {e}")

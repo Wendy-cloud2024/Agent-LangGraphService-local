@@ -39,8 +39,14 @@ def content_merger(state: dict) -> dict:
     agent_findings = state.get("agent_findings", [])
     is_fallback = state.get("is_fallback", False)
 
+    # 关键修复: 只使用当前轮次的 findings，忽略之前轮次累积的旧数据
+    # agent_findings 使用 operator.add reducer，跨轮不会重置
+    # orchestrator_gate 在每轮开始时设置 _turn_start_idx
+    turn_start_idx = state.get("_turn_start_idx", 0)
+    current_turn_findings = agent_findings[turn_start_idx:] if turn_start_idx > 0 else agent_findings
+
     # 检查是否全部为降级结果
-    all_fallback = all(f.get("result_type") == "fallback" for f in agent_findings) if agent_findings else False
+    all_fallback = all(f.get("result_type") == "fallback" for f in current_turn_findings) if current_turn_findings else False
 
     if is_fallback or all_fallback:
         # 降级处理: 使用预置话术
@@ -55,9 +61,9 @@ def content_merger(state: dict) -> dict:
         }
         return updates
 
-    # 按优先级排序子图结果
+    # 按优先级排序子图结果（仅当前轮次）
     sorted_findings = sorted(
-        agent_findings,
+        current_turn_findings,
         key=lambda f: AGENT_PRIORITY.get(f.get("source_agent", "general_agent"), 99),
     )
 
@@ -98,6 +104,6 @@ def content_merger(state: dict) -> dict:
         "merged_content": merged,
         "trace_events": [trace(trace_id, "content_merger", "completed",
                                timer.elapsed_ms(),
-                               {"findings_count": len(agent_findings)})],
+                               {"findings_count": len(current_turn_findings)})],
     }
     return updates

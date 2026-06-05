@@ -35,6 +35,7 @@ from src.config.llm import create_llm
 from src.utils.safety import check_sensitive_words, check_image_safety
 from src.utils.observability import TraceTimer, trace
 from src.utils.parse import parse_json_response
+from src.utils.conversation import build_conversation_context
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,14 @@ def orchestrator_gate(state: dict) -> dict:
     customer_text = last_message.content if hasattr(last_message, "content") else str(last_message)
 
     updates = {}
+
+    # ============================================================
+    # 轮次分隔: 记录当前轮次开始时 agent_findings 的长度
+    # 用于 content_merger 等消费者只使用当前轮次的 findings
+    # 避免跨轮累积旧数据（operator.add reducer 无法重置）
+    # ============================================================
+    current_findings = state.get("agent_findings", [])
+    updates["_turn_start_idx"] = len(current_findings)
 
     # ============================================================
     # Layer 1: 工作记忆窗口截断
@@ -193,9 +202,13 @@ def orchestrator_gate(state: dict) -> dict:
     try:
         categories_str = "\n".join(f"  - {c}" for c in INTENT_CATEGORIES)
         prompt = COMBINED_CLASSIFICATION_PROMPT.format(intent_categories=categories_str)
+
+        # 关键修复: 传入最近对话历史，而不仅是最后一条消息
+        # 这样 "多少钱" 会被结合上下文识别为关于之前讨论的T恤的追问
+        recent_messages = build_conversation_context(current_messages, max_rounds=3)
         response = llm.invoke([
             {"role": "system", "content": prompt},
-            {"role": "user", "content": customer_text},
+            *recent_messages,
         ])
         combined_result = parse_json_response(response.content)
     except Exception as e:

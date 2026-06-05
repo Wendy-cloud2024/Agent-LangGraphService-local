@@ -23,15 +23,18 @@ def subgraph_output_router(state: dict) -> dict:
     trace_id = state.get("trace_id", "")
 
     agent_findings = state.get("agent_findings", [])
+    # 关键修复: 只检查当前轮次的 findings，避免匹配到旧轮次的数据
+    turn_start_idx = state.get("_turn_start_idx", 0)
+    current_findings = agent_findings[turn_start_idx:] if turn_start_idx > 0 else agent_findings
     updates = {}
 
     # 优先级1: 中断信号（最高优先级）
-    escalate_results = [f for f in agent_findings if f.get("escalate_signal")]
+    escalate_results = [f for f in current_findings if f.get("escalate_signal")]
     if escalate_results:
         signal = escalate_results[0]["escalate_signal"]
         updates["escalate_signal"] = signal
         updates["interrupted_subgraph_results"] = [
-            f for f in agent_findings if not f.get("escalate_signal")
+            f for f in current_findings if not f.get("escalate_signal")
         ]
         updates["trace_events"] = [trace(trace_id, "subgraph_output_router", "completed",
                                          timer.elapsed_ms(),
@@ -41,7 +44,7 @@ def subgraph_output_router(state: dict) -> dict:
 
     # 优先级2: 澄清请求
     clarification_results = [
-        f for f in agent_findings if f.get("result_type") == "clarification"
+        f for f in current_findings if f.get("result_type") == "clarification"
     ]
     if clarification_results:
         clarification_attempts = state.get("clarification_attempts", 0)
@@ -63,7 +66,7 @@ def subgraph_output_router(state: dict) -> dict:
             return updates
 
     # 优先级3: 降级处理 - 标记fallback（不原地修改 agent_findings）
-    has_fallback = any(f.get("result_type") == "fallback" for f in agent_findings)
+    has_fallback = any(f.get("result_type") == "fallback" for f in current_findings)
 
     if has_fallback:
         updates["is_fallback"] = True

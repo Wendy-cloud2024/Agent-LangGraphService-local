@@ -25,60 +25,147 @@ from langchain_core.tools import tool
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
 from src.state.schema import PreSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
-from src.tools.ecommerce_tools import check_inventory, find_promotions, search_knowledge_base
-from src.tools.vision_tools import visual_product_match
+from src.tools.ecommerce_tools import (
+    check_inventory, find_promotions, search_knowledge_base,
+    search_products, get_product_details,
+)
 from src.utils.observability import TraceTimer, trace
+from src.utils.conversation import build_conversation_context
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== 商品名称清洗 ====================
+
+def _clean_product_name(raw: str) -> str:
+    """清洗LLM返回的商品名称，去除多余的解释和markdown格式
+
+    LLM可能返回: '您咨询的商品是**经典纯棉圆领T恤**，价格为129元'
+    需要提取: '经典纯棉圆领T恤'
+    """
+    text = raw.strip()
+    # 去除 markdown 加粗标记 **...**
+    text = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', text)
+    # 尝试提取引号中的内容
+    m = re.search(r'["“「]([^"”」]+)["”」]', text)
+    if m:
+        return m.group(1).strip()
+    # 尝试提取 "是" 后面的名词短语（去掉"商品"、"的"等前缀）
+    m = re.search(r'(?:商品(?:名称)?(?:是)?|咨询的|询问的|关于)\s*(.+?)(?:[，。,\.]|$)', text)
+    if m:
+        return m.group(1).strip()
+    # 去掉常见前缀
+    text = re.sub(r'^(?:您咨询的|商品|产品)(?:名称)?(?:是)?[:：]?\s*', '', text)
+    # 去掉末尾的逗号、句号等
+    text = re.sub(r'[，。,.！!？?]+$', '', text)
+    # 如果仍有多句话，取最短的那句（通常是商品名）
+    parts = re.split(r'[，。,]', text)
+    parts = [p.strip() for p in parts if p.strip()]
+    if parts:
+        # 优先选择包含 "T恤/衫/裤/裙/衣/鞋" 等服装关键词的
+        clothing_keywords = ['T恤', '衫', '裤', '裙', '衣', '鞋', '夹克', '卫衣', '外套']
+        for p in parts:
+            if any(kw in p for kw in clothing_keywords):
+                return p
+        # 否则取最短的
+        return min(parts, key=len)
+    return text
 
 
 # ==================== 节点函数 ====================
 
 def product_lookup(state: dict) -> dict:
-    """商品识别节点"""
+    """商品识别节点
+
+    处理流程:
+    1. 从对话历史中提取商品关键词（支持追问场景）
+    2. 调用 search_products 查询数据库获取真实商品数据（SKU、价格等）
+    3. 如果找到精确匹配，用数据库数据覆盖 LLM 提取结果
+    """
     timer = TraceTimer()
     timer.start()
     trace_id = state.get("trace_id", "")
 
     messages = state.get("messages", [])
     last_msg = messages[-1].content if messages else ""
-    media_desc = state.get("media_lightweight_description", "")
 
-    product_info = None
+    # 构建对话历史上下文（支持追问: "多少钱" → 从上下文推断T恤）
+    conversation_context = build_conversation_context(messages)
+
+    # Step 1: LLM 从对话历史中提取商品名称
+    product_name = ""
     try:
-        tools = [visual_product_match]
-        if media_desc:
-            # 有图片时使用视觉工具匹配SKU
-            llm = create_llm(GENERATOR_MODEL, temperature=0).bind_tools(tools)
-            response = llm.invoke([
-                {"role": "system", "content": "根据图片描述匹配商品SKU。"},
-                {"role": "user", "content": f"图片描述: {media_desc}"},
-            ])
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                for tc in response.tool_calls:
-                    result = visual_product_match.invoke(tc["args"])
-                    product_info = result
-
-        if not product_info:
-            # 文本查询
-            llm = create_llm(GENERATOR_MODEL, temperature=0)
-            response = llm.invoke([
-                {"role": "system", "content": "从客户消息中提取商品名称或关键词，返回JSON: {\"product_name\": \"...\", \"keywords\": [...]}"},
-                {"role": "user", "content": last_msg},
-            ])
-            match = re.search(r"```(?:json)?\s*([\s\S]*?)```", response.content)
-            content = match.group(1).strip() if match else response.content
-            try:
-                product_info = json.loads(content)
-            except json.JSONDecodeError:
-                product_info = {"product_name": last_msg, "keywords": [last_msg]}
+        llm = create_llm(GENERATOR_MODEL, temperature=0)
+        response = llm.invoke([
+            {"role": "system", "content": (
+                "从客户消息和对话历史中提取客户正在咨询的商品名称。\n"
+                "如果当前消息没有明确商品名，结合之前对话中讨论的商品推断。\n"
+                "重要：只返回商品名称本身，不要任何解释、标点、markdown格式。\n"
+                "例如输入: '多少钱' -> 输出: 经典纯棉圆领T恤\n"
+                "例如输入: '经典纯棉圆领T恤 我178' -> 输出: 经典纯棉圆领T恤"
+            )},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
+        product_name = _clean_product_name(response.content)
     except Exception as e:
-        logger.error(f"商品识别失败: {e}")
-        product_info = {"product_name": last_msg}
+        logger.error(f"LLM商品名称提取失败: {e}")
+        product_name = last_msg
+
+    logger.info(f"[{trace_id}] 提取商品名称: {product_name}")
+
+    # Step 2: 用商品名称查询数据库，获取真实 SKU、价格等
+    product_info = {"product_name": product_name, "keywords": [product_name]}
+    try:
+        db_result = search_products.invoke({"query": product_name})
+        products = db_result.get("products", [])
+
+        # 如果精确名没匹配到，尝试用对话中的原始关键词重试
+        if not products:
+            # 从最近客户消息中提取可能的商品关键词
+            for msg in messages[-6:]:
+                content = getattr(msg, "content", "")
+                if getattr(msg, "type", "") == "human" and content != last_msg:
+                    db_result = search_products.invoke({"query": content})
+                    products = db_result.get("products", [])
+                    if products:
+                        logger.info(f"[{trace_id}] 重试匹配成功，使用历史消息: {content[:30]}")
+                        break
+
+        if products:
+            # 取最佳匹配
+            best = products[0]
+            product_info = {
+                "product_name": best.get("name", product_name),
+                "sku": best.get("sku", ""),
+                "price": best.get("price", 0),
+                "category": best.get("category", ""),
+                "color": best.get("color", ""),
+                "material": best.get("material", ""),
+                "status": best.get("status", ""),
+                "keywords": [product_name],
+            }
+            logger.info(f"[{trace_id}] 数据库匹配成功: sku={product_info['sku']}, "
+                        f"name={product_info['product_name']}, price={product_info['price']}")
+
+            # Step 3: 获取详细尺码信息
+            if product_info.get("sku"):
+                try:
+                    details = get_product_details.invoke({"sku": product_info["sku"]})
+                    product_info["size_chart"] = details.get("size_chart", [])
+                except Exception as e:
+                    logger.warning(f"获取尺码详情失败: {e}")
+        else:
+            logger.warning(f"[{trace_id}] 数据库未找到匹配商品: {product_name}")
+    except Exception as e:
+        logger.error(f"数据库商品查询失败: {e}")
 
     return {
         "product_info": product_info,
-        "trace_events": [trace(trace_id, "product_lookup", "completed", timer.elapsed_ms())],
+        "trace_events": [trace(trace_id, "product_lookup", "completed",
+                               timer.elapsed_ms(),
+                               {"sku": product_info.get("sku", ""),
+                                "price": product_info.get("price", 0)})],
     }
 
 
@@ -222,9 +309,11 @@ def presales_respond(state: dict) -> dict:
                                    timer.elapsed_ms(), {"action": "clarification"})],
         }
 
-    # 生成回复
+    # 生成回复 — 使用对话历史保持上下文连贯
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0.3)
+        conversation_context = build_conversation_context(messages)
+
         prompt = f"""根据以下信息回答客户的商品咨询:
 
 商品信息: {product_info}
@@ -233,10 +322,14 @@ def presales_respond(state: dict) -> dict:
 推荐: {recommendations}
 优惠: {promotions}
 
-客户消息: {last_msg}
+请直接回复客户，包含商品详情、库存状态、推荐和优惠信息。
+注意：如果客户的问题是追问（如"多少钱"、"有货吗"），结合之前的对话上下文回答。"""
 
-请直接回复客户，包含商品详情、库存状态、推荐和优惠信息。"""
-        response = llm.invoke([{"role": "user", "content": prompt}])
+        response = llm.invoke([
+            {"role": "system", "content": prompt},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
         answer = response.content
     except Exception as e:
         logger.error(f"售前回复生成失败: {e}")

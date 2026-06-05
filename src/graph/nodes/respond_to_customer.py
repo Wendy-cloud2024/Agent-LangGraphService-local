@@ -5,11 +5,14 @@
 - 格式化最终消息
 - 附加相关信息 (订单链接, 物流URL, 退货标签)
 - 发送到客户渠道
+- 将AI回复写入messages（关键：维持对话历史的完整性）
 - 写入观测埋点 (trace_events)
 - 更新工单状态为 resolved
 """
 
 import logging
+
+from langchain_core.messages import AIMessage
 
 from src.utils.observability import TraceTimer, trace
 
@@ -27,6 +30,9 @@ def respond_to_customer(state: dict) -> dict:
         draft = state.get("merged_content", "感谢您的咨询，如有其他问题请随时联系我们。")
 
     updates = {
+        # 关键修复: 将AI回复写入messages，确保下一轮对话能看到本轮回答
+        # add_messages reducer 会自动追加，不会覆盖已有消息
+        "messages": [AIMessage(content=draft)],
         "resolution_status": "resolved",
         "trace_events": [trace(trace_id, "respond_to_customer", "completed",
                                timer.elapsed_ms(),

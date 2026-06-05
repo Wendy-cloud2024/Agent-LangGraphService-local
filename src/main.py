@@ -108,6 +108,7 @@ def interactive_mode():
     print("-" * 40)
 
     app = _get_app()
+    first_turn = True
 
     while True:
         try:
@@ -124,15 +125,33 @@ def interactive_mode():
             continue
 
         trace_id = generate_trace_id()
-        initial_state = create_initial_state(
-            session_id=thread_id,
-            customer_id=customer_id,
-            customer_tier=customer_tier,
-        )
-        initial_state["trace_id"] = trace_id
-        initial_state["messages"] = [HumanMessage(content=message)]
-
         config = {"configurable": {"thread_id": thread_id}}
+
+        if first_turn:
+            # 首轮: 需要完整的初始状态（尚无checkpoint）
+            from src.memory.customer_store import get_customer_store
+            store = get_customer_store()
+            customer_profile = store.load(customer_id)
+
+            initial_state = create_initial_state(
+                session_id=thread_id,
+                customer_id=customer_id,
+                customer_tier=customer_tier,
+            )
+            initial_state["customer_profile"] = customer_profile
+            initial_state["trace_id"] = trace_id
+            initial_state["messages"] = [HumanMessage(content=message)]
+            first_turn = False
+        else:
+            # 后续轮: 仅传入新消息，让checkpoint保留对话历史和状态
+            # 关键修复: 不再调用 create_initial_state() 覆盖全量状态
+            #   - messages 通过 add_messages reducer 自动追加
+            #   - 标量字段 (pending_clarification, session_takeover等) 从checkpoint保留
+            #   - reducer字段 (agent_findings等) 通过 orchestrator_gate 的 _turn_start_idx 管理
+            initial_state = {
+                "messages": [HumanMessage(content=message)],
+                "trace_id": trace_id,
+            }
 
         try:
             result = app.invoke(initial_state, config)

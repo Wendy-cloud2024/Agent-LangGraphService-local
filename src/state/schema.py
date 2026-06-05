@@ -101,6 +101,9 @@ class ConversationState(TypedDict):
     # --- 会话接管 ---
     session_takeover: bool                                   # 是否被人工客服接管
 
+    # --- 轮次管理 ---
+    _turn_start_idx: int                                     # 当前轮次开始时agent_findings的长度，用于跨轮隔离
+
     # --- 元数据 ---
     created_at: str                                          # 创建时间
     updated_at: str                                          # 更新时间
@@ -270,6 +273,7 @@ def create_initial_state(session_id: str, customer_id: str,
         trace_events=[],
         trace_id="",
         session_takeover=False,
+        _turn_start_idx=0,
         created_at=now,
         updated_at=now,
         tags=[],

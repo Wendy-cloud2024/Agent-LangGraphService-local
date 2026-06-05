@@ -13,6 +13,8 @@
 
 import logging
 
+from langchain_core.messages import AIMessage
+
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
 from src.config.prompts import CLARIFICATION_PROMPT
@@ -67,6 +69,8 @@ def clarify_to_customer(state: dict) -> dict:
     clarification_attempts = state.get("clarification_attempts", 0) + 1
 
     updates = {
+        # 将澄清追问写入messages，维持对话历史完整性
+        "messages": [AIMessage(content=clarification_msg)],
         "pending_clarification": True,
         "pending_subgraph": pending_subgraph,
         "pending_clarification_intent": state.get("intent_labels", [{}])[0].get("intent", ""),

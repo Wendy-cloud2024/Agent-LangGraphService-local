@@ -23,6 +23,7 @@ from src.config.settings import GENERATOR_MODEL, EMOTION_INTENSITY_THRESHOLD
 from src.config.llm import create_llm
 from src.state.schema import GeneralState, SubgraphOutput, RESULT_TYPE_NORMAL, ESCALATE_TO_COMPLAINT
 from src.utils.observability import TraceTimer, trace
+from src.utils.conversation import build_conversation_context
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,12 @@ def faq_matcher(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0).bind_tools([search_faq])
-        response = llm.invoke([{"role": "user", "content": last_msg}])
+        conversation_context = build_conversation_context(messages, max_rounds=3)
+        response = llm.invoke([
+            {"role": "system", "content": "结合对话历史理解客户的问题，搜索FAQ。"},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
         # 尝试从tool_calls获取结果
         if hasattr(response, "tool_calls") and response.tool_calls:
             for tc in response.tool_calls:
@@ -108,7 +114,12 @@ def policy_search_node(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0).bind_tools([search_policy])
-        response = llm.invoke([{"role": "user", "content": last_msg}])
+        conversation_context = build_conversation_context(messages, max_rounds=3)
+        response = llm.invoke([
+            {"role": "system", "content": "结合对话历史理解客户的问题，搜索相关政策。"},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
         if hasattr(response, "tool_calls") and response.tool_calls:
             for tc in response.tool_calls:
                 if tc["name"] == "search_policy":
@@ -150,6 +161,8 @@ def general_respond(state: dict) -> dict:
 
     try:
         llm = create_llm(GENERATOR_MODEL, temperature=0.3)
+        conversation_context = build_conversation_context(messages, max_rounds=3)
+
         prompt = f"""根据以下信息回答客户的问题。
 如果FAQ或政策中有相关信息，请使用。
 如果没有直接匹配的信息，请友好地告知客户并建议转人工客服。
@@ -157,10 +170,13 @@ def general_respond(state: dict) -> dict:
 背景信息:
 {context}
 
-客户消息: {last_msg}
+注意：如果客户的问题是追问，结合之前的对话上下文回答。"""
 
-请直接回复客户:"""
-        response = llm.invoke([{"role": "user", "content": prompt}])
+        response = llm.invoke([
+            {"role": "system", "content": prompt},
+            *conversation_context,
+            {"role": "user", "content": last_msg},
+        ])
         answer = response.content
     except Exception as e:
         logger.error(f"通用回复生成失败: {e}")
@@ -195,12 +211,15 @@ def emotion_monitor(state: dict) -> dict:
         escalate = True
         signal = ESCALATE_TO_COMPLAINT
 
-    # 检测投诉关键词
+    # 检测投诉关键词 — 在最近所有客户消息中搜索
     messages = state.get("messages", [])
     if messages:
-        last_msg = messages[-1].content if messages else ""
+        recent_human_text = " ".join(
+            getattr(m, "content", "") for m in messages[-6:]
+            if getattr(m, "type", "") == "human"
+        )
         complaint_keywords = ["投诉", "骗子", "315", "曝光", "举报"]
-        if any(kw in last_msg for kw in complaint_keywords):
+        if any(kw in recent_human_text for kw in complaint_keywords):
             escalate = True
             signal = ESCALATE_TO_COMPLAINT
 
