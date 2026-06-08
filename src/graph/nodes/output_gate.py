@@ -11,7 +11,6 @@
 检查项: 安全(PII/有害内容), 质量评分, 风险评估
 """
 
-import re
 import json
 import logging
 

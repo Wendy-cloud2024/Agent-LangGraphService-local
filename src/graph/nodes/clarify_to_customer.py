@@ -77,10 +77,15 @@ def clarify_to_customer(state: dict) -> dict:
         "pending_accumulated_state": {
             "intent_labels": state.get("intent_labels", []),
             "emotion": state.get("emotion", ""),
+            "emotion_intensity": state.get("emotion_intensity", 0.3),
             "customer_tier": state.get("customer_tier", ""),
+            "urgency": state.get("urgency", "low"),
+            "language": state.get("language", "zh"),
             "clarification_request": clarification_request,
         },
         "clarification_attempts": clarification_attempts,
+        # 清除 clarification_request，避免 subgraph_output_router 误判
+        "clarification_request": None,
         "draft_response": clarification_msg,
         "resolution_status": "clarifying",
         "trace_events": [trace(trace_id, "clarify_to_customer", "completed",
