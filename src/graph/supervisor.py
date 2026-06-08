@@ -15,6 +15,7 @@
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Send
 
 from src.state.schema import ConversationState
 from src.graph.nodes.orchestrator_gate import orchestrator_gate, route_by_labels
@@ -115,11 +116,13 @@ def build_supervisor_graph() -> StateGraph:
 
     # ==================== 条件边: orchestrator_gate路由 ====================
     # route_by_labels 根据active_agents决定路由目标:
-    #   - active_agents含"escalate_to_human" → 直接escalate_to_human（转人工快捷通道）
-    #   - escalate_signal=="to_human" → escalate_to_human（子图升级信号）
-    #   - escalate_signal=="to_complaint" → complaint_agent（子图升级到投诉）
-    #   - pending_clarification==True → 路由到pending_subgraph（澄清重入, 跳过全部分诊）
-    #   - 正常: 按active_agents列表路由（支持多子图并行扇出, 如同时激活售前+通用）
+    #   - 转人工快捷通道 → "escalate_to_human"
+    #   - 升级信号 → "escalate_to_human" 或 "complaint_agent"
+    #   - 澄清重入 → pending_subgraph (跳过全部分诊)
+    #   - 单子图 → 返回 str, 通过 path_map 映射
+    #   - 多子图并行 → 返回 list[Send], 每个子图携带完整状态独立执行
+    #     所有并行子图完成后通过 operator.add reducer 聚合到 agent_findings
+    #     subgraph_output_router 在所有并行子图完成后统一触发一次
     #   - 兜底: active_agents为空时路由到general_agent
     graph.add_conditional_edges(
         "orchestrator_gate",

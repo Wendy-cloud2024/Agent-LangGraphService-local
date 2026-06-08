@@ -18,6 +18,7 @@ import json
 import logging
 
 from langchain_core.messages import HumanMessage
+from langgraph.types import Send
 
 from src.config.settings import (
     CLASSIFIER_MODEL,
@@ -90,6 +91,72 @@ def orchestrator_gate(state: dict) -> dict:
     # ============================================================
     current_findings = state.get("agent_findings", [])
     updates["_turn_start_idx"] = len(current_findings)
+
+    # ============================================================
+    # 轻量模式: 人工拒绝-重分诊
+    # 当 human_decision == "reject_reclassify" 时，跳过安全审核/转人工匹配/
+    # 多模态/语言检测/摘要压缩等昂贵步骤，仅重做意图分类+情感检测+路由决策。
+    # 人工反馈作为额外上下文注入到分类 prompt 中。
+    # ============================================================
+    if state.get("human_decision") == "reject_reclassify":
+        logger.info(f"[{trace_id}] 轻量模式: reject_reclassify, 跳过安全审核, 仅重做意图分类")
+        updates["human_decision"] = ""  # 清除标记，避免下次仍走轻量模式
+
+        llm = create_llm(CLASSIFIER_MODEL, temperature=0)
+        combined_result = {}
+        try:
+            categories_str = "\n".join(f"  - {c}" for c in INTENT_CATEGORIES)
+            prompt = COMBINED_CLASSIFICATION_PROMPT.format(intent_categories=categories_str)
+
+            # 构建上下文: 人工反馈 + 最近对话
+            recent_messages = build_conversation_context(messages, max_rounds=3)
+            human_feedback = state.get("human_feedback", "")
+            extra_context = ""
+            if human_feedback:
+                extra_context = f"\n[人工审核员反馈: {human_feedback}]"
+
+            response = llm.invoke([
+                {"role": "system", "content": prompt + extra_context},
+                *recent_messages,
+            ])
+            combined_result = parse_json_response(response.content)
+        except Exception as e:
+            logger.error(f"轻量模式分类失败: {e}")
+
+        intent_labels = combined_result.get("intent_labels", [])
+        if not intent_labels:
+            intent_labels = [{"intent": "general_faq", "confidence": 0.5, "primary": True}]
+        updates["intent_labels"] = intent_labels
+        updates["emotion"] = combined_result.get("emotion", "neutral")
+        updates["emotion_intensity"] = float(combined_result.get("emotion_intensity", 0.3))
+        updates["urgency"] = combined_result.get("urgency", "low")
+
+        # 路由决策
+        emotion_val = updates.get("emotion", "neutral")
+        intensity_val = updates.get("emotion_intensity", 0.3)
+        if intensity_val > EMOTION_INTENSITY_THRESHOLD and emotion_val in ("angry", "frustrated"):
+            updates["active_agents"] = ["complaint_agent"]
+            updates["routing_reason"] = f"轻量模式-极端情感旁路: {emotion_val}"
+        else:
+            active_agents = set()
+            primary_intent = None
+            for label in intent_labels:
+                intent = label.get("intent", "")
+                if label.get("primary"):
+                    primary_intent = intent
+                subgraph = INTENT_TO_SUBGRAPH.get(intent, "general_agent")
+                active_agents.add(subgraph)
+            if not active_agents:
+                active_agents.add("general_agent")
+            updates["active_agents"] = list(active_agents)
+            updates["routing_reason"] = f"轻量模式-意图路由: {primary_intent or 'unknown'}"
+
+        updates["trace_events"] = [trace(trace_id, "orchestrator_gate", "completed",
+                                         timer.elapsed_ms(),
+                                         {"action": "lightweight_reclassify",
+                                          "active_agents": updates.get("active_agents", []),
+                                          "human_feedback": human_feedback[:100] if human_feedback else ""})]
+        return updates
 
     # ============================================================
     # Layer 1: 工作记忆窗口截断
@@ -262,22 +329,44 @@ def orchestrator_gate(state: dict) -> dict:
 
 # ==================== 条件边: 路由函数 ====================
 
-def route_by_labels(state: dict) -> list[str]:
-    """根据orchestrator_gate的路由决策返回目标节点列表"""
+def route_by_labels(state: dict) -> str | list[Send]:
+    """根据orchestrator_gate的路由决策返回目标节点
+
+    路由策略:
+      - 特殊路由 (转人工/升级/澄清重入): 始终返回 str, 单目标路由
+      - 单子图路由 (95%+ 场景): 返回 str, 通过 path_map 映射到节点
+      - 多子图并行: 返回 list[Send], 每个子图携带完整状态副本独立执行
+
+    LangGraph Send API 行为:
+      - Send(node_name, arg) 中 arg 成为目标节点的完整输入状态
+      - 多个 Send 在同一 superstep 中并行执行
+      - 所有并行执行完成后, 通过 operator.add reducer 聚合结果
+      - subgraph_output_router 在所有并行子图完成后统一触发一次
+    """
     active_agents = state.get("active_agents", [])
 
-    # 特殊路由: 转人工
+    # 特殊路由: 转人工 (始终单路由)
     if "escalate_to_human" in active_agents:
-        return ["escalate_to_human"]
+        return "escalate_to_human"
 
-    # 检查是否有escalate信号
+    # 检查是否有escalate信号 (始终单路由)
     if state.get("escalate_signal") == "to_human":
-        return ["escalate_to_human"]
+        return "escalate_to_human"
     if state.get("escalate_signal") == "to_complaint":
-        return ["complaint_agent"]
+        return "complaint_agent"
 
-    # 检查澄清重入
+    # 检查澄清重入 (始终单路由)
     if state.get("pending_clarification"):
-        return [state.get("pending_subgraph", "general_agent")]
+        return state.get("pending_subgraph", "general_agent")
 
-    return active_agents if active_agents else ["general_agent"]
+    # 正常路由
+    if not active_agents:
+        return "general_agent"
+
+    # 单子图: 直接返回字符串 (走 path_map 映射, 保持现有行为)
+    if len(active_agents) == 1:
+        return active_agents[0]
+
+    # 多子图并行: 使用 Send API 扇出
+    # dict(state) 创建浅拷贝, 各子图独立执行互不干扰
+    return [Send(agent, dict(state)) for agent in active_agents]

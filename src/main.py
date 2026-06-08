@@ -23,6 +23,7 @@ from src.graph.supervisor import compile_supervisor_graph
 from src.state.schema import create_initial_state
 from src.utils.observability import generate_trace_id
 from src.tools.result_logger import log_invoke_result, log_execution_path
+from src.graph.nodes.escalate_to_human import release_takeover
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -94,10 +95,21 @@ def run_conversation(
 
 
 def interactive_mode():
-    """交互式对话模式"""
+    """交互式对话模式
+
+    支持两种模式:
+      - 正常模式: 客户与 AI 对话
+      - 接管模式: 人工客服接管后，所有消息直达人工
+
+    特殊命令:
+      - /end_takeover: 人工客服结束接管，恢复 AI 处理
+      - /status: 查看当前会话状态
+      - quit/exit: 退出程序
+    """
     print("=" * 60)
     print("  电商智能客服Agent - 交互模式")
     print("  输入 'quit' 或 'exit' 退出")
+    print("  输入 '/status' 查看会话状态")
     print("=" * 60)
 
     customer_id = input("请输入客户ID (默认: C001): ").strip() or "C001"
@@ -109,13 +121,22 @@ def interactive_mode():
 
     app = _get_app()
     first_turn = True
+    session_takeover = False  # 本地追踪接管状态
 
     while True:
-        try:
-            message = input("\n客户: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n再见！")
-            break
+        # 根据接管状态显示不同的提示符
+        if session_takeover:
+            try:
+                message = input("\n[接管模式] 人工客服> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n再见！")
+                break
+        else:
+            try:
+                message = input("\n客户: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n再见！")
+                break
 
         if message.lower() in ("quit", "exit", "q"):
             print("再见！")
@@ -124,8 +145,44 @@ def interactive_mode():
         if not message:
             continue
 
-        trace_id = generate_trace_id()
         config = {"configurable": {"thread_id": thread_id}}
+
+        # ============================================================
+        # 特殊命令处理
+        # ============================================================
+
+        # /end_takeover: 人工客服结束接管
+        if message == "/end_takeover":
+            if session_takeover:
+                result = release_takeover(app, config)
+                if result is not None:
+                    session_takeover = False
+                    print("\n[系统] 接管已释放，AI 将恢复自动处理。")
+                    print(f"客服: 已为您处理完毕，如果您还有其他问题，欢迎随时咨询。")
+                else:
+                    print("\n[系统] 释放接管失败，请重试。")
+            else:
+                print("\n[系统] 当前不在接管模式。")
+            continue
+
+        # /status: 查看当前会话状态
+        if message == "/status":
+            snapshot = app.get_state(config)
+            values = snapshot.values
+            takeover = values.get("session_takeover", False)
+            status = values.get("resolution_status", "")
+            msg_count = len(values.get("messages", []))
+            findings = len(values.get("agent_findings", []))
+            print(f"\n[会话状态]")
+            print(f"  接管模式: {'是' if takeover else '否'}")
+            print(f"  解决状态: {status}")
+            print(f"  消息数量: {msg_count}")
+            print(f"  子图结果: {findings}")
+            if snapshot.next:
+                print(f"  待执行节点: {snapshot.next}")
+            continue
+
+        trace_id = generate_trace_id()
 
         if first_turn:
             # 首轮: 需要完整的初始状态（尚无checkpoint）
@@ -158,6 +215,15 @@ def interactive_mode():
             log_invoke_result(result)
             log_execution_path(result)
 
+            # 检测接管状态变化
+            new_takeover = result.get("session_takeover", False)
+            if new_takeover and not session_takeover:
+                session_takeover = True
+                print("\n[系统] 人工客服已接管此会话。")
+                print("  输入 /end_takeover 结束接管")
+                print("  人工客服可直接输入回复内容")
+
+            # 显示回复
             draft = result.get("draft_response", "") or result.get("merged_content", "")
             if draft:
                 print(f"\n客服: {draft}")
@@ -166,7 +232,10 @@ def interactive_mode():
 
             status = result.get("resolution_status", "")
             if status == "escalated":
-                print("  [已转接人工客服]")
+                if session_takeover:
+                    print("  [已进入人工接管模式]")
+                else:
+                    print("  [已转接人工客服]")
             elif status == "clarifying":
                 print("  [等待您提供更多信息]")
 

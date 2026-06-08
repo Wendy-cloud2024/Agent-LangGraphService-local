@@ -34,6 +34,10 @@ def tone_adapter(state: dict) -> dict:
                                    timer.elapsed_ms(), {"action": "empty_input"})],
         }
 
+    # 先递增自动修正次数（在 LLM 调用之前）
+    # 确保即使 LLM 失败，计数器也已递增，避免 output_gate 无限循环
+    correction_attempts = state.get("auto_correction_attempts", 0) + 1
+
     llm = create_llm(ADAPTER_MODEL, temperature=0.3)
     try:
         prompt = TONE_ADAPTER_PROMPT.format(
@@ -48,9 +52,6 @@ def tone_adapter(state: dict) -> dict:
     except Exception as e:
         logger.error(f"语气适配失败: {e}")
         adapted = merged_content
-
-    # 递增自动修正次数
-    correction_attempts = state.get("auto_correction_attempts", 0) + 1
 
     updates = {
         "draft_response": adapted,

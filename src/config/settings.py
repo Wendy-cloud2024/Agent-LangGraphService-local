@@ -56,10 +56,21 @@ EMOTION_INTENSITY_THRESHOLD = 0.9
 # 客户等级
 CUSTOMER_TIERS = ["standard", "vip", "enterprise"]
 
-# ==================== 子图超时配置 ====================
-SUBGRAPH_TIMEOUT_SECONDS = 30       # 子图执行超时
-TOOL_CALL_TIMEOUT_SECONDS = 10      # 工具调用超时
-HUMAN_REVIEW_TIMEOUT_MINUTES = 15   # 人工审核超时
+# ==================== Supervisor中断协议配置 ====================
+# 投诉关键词（触发 escalate_to_complaint）
+COMPLAINT_KEYWORDS = [
+    "投诉", "骗子", "315", "曝光", "举报",
+    "消费者协会", "工商局", "法院", "律师", "维权",
+    "假货", "欺诈", "退款不退", "太差了",
+]
+# 连续工具调用失败阈值（超过此数值触发 escalate_to_human）
+TOOL_FAILURE_THRESHOLD = 2
+# 子图超时（秒）
+SUBGRAPH_TIMEOUT_SECONDS = 30
+# 单次工具调用超时（秒）
+TOOL_CALL_TIMEOUT_SECONDS = 10
+# 人工审核超时（分钟）
+HUMAN_REVIEW_TIMEOUT_MINUTES = 15
 
 # ==================== 观测配置 ====================
 TRACE_ENABLED = os.getenv("TRACE_ENABLED", "true").lower() == "true"

@@ -26,7 +26,8 @@ from langgraph.graph import StateGraph, END
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
-from src.state.schema import AfterSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
+from src.state.schema import AfterSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION, ESCALATE_TO_COMPLAINT, ESCALATE_TO_HUMAN
+from src.utils.escalation import evaluate_escalation
 from src.tools.ecommerce_tools import (
     get_order_details, check_return_eligibility, check_warranty_status,
     get_customer_orders, send_return_label, issue_store_credit,
@@ -303,6 +304,7 @@ def aftersales_respond(state: dict) -> dict:
             "result_type": RESULT_TYPE_CLARIFICATION,
             "clarification_request": clarification,
             "escalate_signal": None,
+            "_findings": {},  # 澄清时不检查升级
             "trace_events": [trace(trace_id, "aftersales_respond", "completed",
                                    timer.elapsed_ms(), {"action": "clarification"})],
         }
@@ -334,22 +336,54 @@ def aftersales_respond(state: dict) -> dict:
         answer = "抱歉，处理您的请求时遇到了问题，请稍后再试。"
 
     return {
-        "agent_findings": [{
-            "source_agent": "aftersales_agent",
-            "result_type": RESULT_TYPE_NORMAL,
-            "findings": {
-                "answer": answer,
-                "issue_type": issue_type,
-                "resolution": plan.get("resolution", ""),
-                "eligible": eligibility.get("eligible", False),
-            },
-            "clarification_request": None,
-            "escalate_signal": None,
-        }],
         "result_type": RESULT_TYPE_NORMAL,
         "clarification_request": None,
         "escalate_signal": None,
+        "_findings": {
+            "answer": answer,
+            "issue_type": issue_type,
+            "resolution": plan.get("resolution", ""),
+            "eligible": eligibility.get("eligible", False),
+        },
         "trace_events": [trace(trace_id, "aftersales_respond", "completed", timer.elapsed_ms())],
+    }
+
+
+def escalation_monitor(state: dict) -> dict:
+    """售后子图升级监控 - 检测退款被拒后情绪爆发
+
+    触发条件:
+      - 退款被拒(eligible==False) + 情绪激动 → escalate_to_complaint
+      - 投诉关键词 → escalate_to_complaint
+      - 极端负面情绪(>0.9) → escalate_to_complaint
+      - 连续2次工具失败 → escalate_to_human
+    """
+    timer = TraceTimer()
+    timer.start()
+    trace_id = state.get("trace_id", "")
+
+    # 构建子图特定上下文: 退款被拒标志
+    inner_findings = state.get("_findings") or {}
+    subgraph_context = {
+        "refund_denied": inner_findings.get("eligible") is False,
+    }
+
+    signal = evaluate_escalation(state, subgraph_context)
+
+    if signal:
+        logger.info(f"[{trace_id}] 售后子图升级信号: {signal}")
+
+    return {
+        "agent_findings": [{
+            "source_agent": "aftersales_agent",
+            "result_type": RESULT_TYPE_NORMAL,
+            "findings": inner_findings,
+            "clarification_request": None,
+            "escalate_signal": signal,
+        }],
+        "escalate_signal": signal,
+        "trace_events": [trace(trace_id, "escalation_monitor", "completed",
+                               timer.elapsed_ms(), {"escalate_signal": signal})],
     }
 
 
@@ -364,6 +398,7 @@ def build_aftersales_subgraph() -> StateGraph:
     graph.add_node("resolution_planner", resolution_planner)
     graph.add_node("tool_executor", tool_executor)
     graph.add_node("aftersales_respond", aftersales_respond)
+    graph.add_node("escalation_monitor", escalation_monitor)
 
     graph.set_entry_point("issue_identify")
     graph.add_edge("issue_identify", "order_fetch")
@@ -372,7 +407,14 @@ def build_aftersales_subgraph() -> StateGraph:
     graph.add_edge("evidence_collector", "resolution_planner")
     graph.add_edge("resolution_planner", "tool_executor")
     graph.add_edge("tool_executor", "aftersales_respond")
-    graph.add_edge("aftersales_respond", END)
+    # aftersales_respond → escalation_monitor → END
+    # 澄清请求直接到END
+    graph.add_conditional_edges(
+        "aftersales_respond",
+        lambda s: "escalation_monitor" if s.get("result_type") != RESULT_TYPE_CLARIFICATION else END,
+        {"escalation_monitor": "escalation_monitor", END: END},
+    )
+    graph.add_edge("escalation_monitor", END)
 
     return graph
 

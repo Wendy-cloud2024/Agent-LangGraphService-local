@@ -27,6 +27,7 @@ from langgraph.types import Command
 from src.graph.supervisor import compile_supervisor_graph
 from src.state.schema import create_initial_state
 from src.utils.observability import generate_trace_id
+from src.graph.nodes.escalate_to_human import release_takeover
 
 # ── 单例图 ──────────────────────────────────────────────
 _app = None
@@ -87,9 +88,13 @@ def show_result(app, config):
 
     draft = values.get("draft_response", "") or values.get("merged_content", "")
     status = values.get("resolution_status", "")
+    takeover = values.get("session_takeover", False)
 
     print(f"\n[客服回复] {draft or '(无回复)'}")
-    if status == "escalated":
+    if takeover:
+        print("  -> 人工接管模式已激活")
+        print("  -> 输入 /end_takeover 结束接管")
+    elif status == "escalated":
         print("  -> 已转接人工客服")
     elif status == "clarifying":
         print("  -> 等待客户提供更多信息")
@@ -217,31 +222,64 @@ def main():
     box("人工服务模拟器", 30)
     print("  测试 interrupt 中断 -> 人工处理 -> 恢复执行")
     print("  输入 quit / exit / q 退出")
+    print("  输入 /end_takeover 结束人工接管")
+    print("  输入 /status 查看会话状态")
     box("测试提示", 30)
     print('  "人工客服"              -> 直接触发转人工')
     print('  "我要投诉，东西太差了"   -> 可能触发投诉审批 interrupt')
     print('  任何消息 (高风险时)     -> 触发 human_review interrupt')
+    print('  human_review 中选 "5"  -> 触发接管模式')
     box()
 
     customer_id = input("客户ID (默认 C001): ").strip() or "C001"
     tier = input("客户等级 (standard/vip/enterprise, 默认 standard): ").strip() or "standard"
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
+    session_takeover = False
 
     print(f"\n会话ID: {thread_id}")
     print("-" * 50)
 
     while True:
-        try:
-            message = input("\n客户: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n再见！")
-            break
+        # 根据接管状态显示不同的提示符
+        if session_takeover:
+            try:
+                message = input("\n[接管模式] 人工客服> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n再见！")
+                break
+        else:
+            try:
+                message = input("\n客户: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n再见！")
+                break
 
         if message.lower() in ("quit", "exit", "q"):
             print("再见！")
             break
         if not message:
+            continue
+
+        # /end_takeover: 人工客服结束接管
+        if message == "/end_takeover":
+            if session_takeover:
+                result = release_takeover(app, config)
+                if result is not None:
+                    session_takeover = False
+                    print("\n[系统] 接管已释放，AI 将恢复自动处理。")
+                else:
+                    print("\n[系统] 释放接管失败，请重试。")
+            else:
+                print("\n[系统] 当前不在接管模式。")
+            continue
+
+        # /status: 查看会话状态
+        if message == "/status":
+            snapshot = app.get_state(config)
+            values = snapshot.values
+            takeover = values.get("session_takeover", False)
+            print(f"\n[会话状态] 接管={takeover}, 待执行={snapshot.next}")
             continue
 
         trace_id = generate_trace_id()
@@ -260,6 +298,14 @@ def main():
                 pass  # 已由中断处理器处理
             else:
                 show_result(app, config)
+
+            # 检测接管状态
+            snapshot = app.get_state(config)
+            new_takeover = snapshot.values.get("session_takeover", False)
+            if new_takeover and not session_takeover:
+                session_takeover = True
+                print("\n[系统] 人工接管模式已激活")
+                print("  输入 /end_takeover 结束接管")
 
         except Exception as e:
             print(f"\n[错误] {e}")

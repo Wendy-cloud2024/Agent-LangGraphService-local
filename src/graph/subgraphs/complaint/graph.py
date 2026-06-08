@@ -25,7 +25,9 @@ from langgraph.types import interrupt
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
-from src.state.schema import ComplaintState, SubgraphOutput, RESULT_TYPE_NORMAL, ESCALATE_TO_HUMAN
+from src.state.schema import ComplaintState, SubgraphOutput, RESULT_TYPE_NORMAL, ESCALATE_TO_COMPLAINT, ESCALATE_TO_HUMAN
+from src.utils.escalation import evaluate_escalation, check_tool_failures
+from src.config.settings import TOOL_FAILURE_THRESHOLD
 from src.tools.ecommerce_tools import get_customer_orders, apply_compensation, get_order_details
 from src.tools.vision_tools import detect_quality_issue
 from src.utils.observability import TraceTimer, trace
@@ -293,6 +295,49 @@ def complaint_respond(state: dict) -> dict:
     }
 
 
+def escalation_monitor(state: dict) -> dict:
+    """投诉子图升级监控 - 特殊: 仅检测工具失败，直接 escalate_to_human
+
+    投诉子图不降级（不走fallback），异常/工具失败直接转人工经理。
+    不检查投诉关键词（本身就在处理投诉）和极端情绪（已由入口旁路处理）。
+    """
+    timer = TraceTimer()
+    timer.start()
+    trace_id = state.get("trace_id", "")
+
+    # 仅检查工具失败
+    tool_calls = state.get("tool_calls_made", [])
+    consecutive_failures = check_tool_failures(tool_calls)
+    signal = None
+
+    if consecutive_failures >= TOOL_FAILURE_THRESHOLD:
+        signal = ESCALATE_TO_HUMAN
+        logger.warning(
+            f"[{trace_id}] 投诉子图: 连续工具失败{consecutive_failures}次, "
+            f"发出 escalate_to_human 信号（投诉不降级, 直接转人工经理）"
+        )
+
+    # 读取 complaint_respond 的 findings（从 agent_findings 最后一条获取）
+    findings = {}
+    agent_findings = state.get("agent_findings", [])
+    if agent_findings:
+        last = agent_findings[-1] if isinstance(agent_findings[-1], dict) else {}
+        findings = last.get("findings", {})
+
+    return {
+        "agent_findings": [{
+            "source_agent": "complaint_agent",
+            "result_type": RESULT_TYPE_NORMAL,
+            "findings": findings,
+            "clarification_request": None,
+            "escalate_signal": signal,
+        }],
+        "escalate_signal": signal,
+        "trace_events": [trace(trace_id, "escalation_monitor", "completed",
+                               timer.elapsed_ms(), {"escalate_signal": signal})],
+    }
+
+
 def _route_after_classifier(state: dict) -> str:
     """分类后路由: critical+angry走快速通道"""
     severity = state.get("complaint_severity", "medium")
@@ -312,6 +357,7 @@ def build_complaint_subgraph() -> StateGraph:
     graph.add_node("resolution_planner", resolution_planner)
     graph.add_node("approval_gate", approval_gate)
     graph.add_node("complaint_respond", complaint_respond)
+    graph.add_node("escalation_monitor", escalation_monitor)
 
     graph.set_entry_point("complaint_classifier")
 
@@ -326,7 +372,8 @@ def build_complaint_subgraph() -> StateGraph:
     graph.add_edge("empathy_responder", "resolution_planner")
     graph.add_edge("resolution_planner", "approval_gate")
     graph.add_edge("approval_gate", "complaint_respond")
-    graph.add_edge("complaint_respond", END)
+    graph.add_edge("complaint_respond", "escalation_monitor")
+    graph.add_edge("escalation_monitor", END)
 
     return graph
 

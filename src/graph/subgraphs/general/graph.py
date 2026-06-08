@@ -24,6 +24,7 @@ from src.config.llm import create_llm
 from src.state.schema import GeneralState, SubgraphOutput, RESULT_TYPE_NORMAL, ESCALATE_TO_COMPLAINT
 from src.utils.observability import TraceTimer, trace
 from src.utils.conversation import build_conversation_context
+from src.utils.escalation import evaluate_escalation
 
 logger = logging.getLogger(__name__)
 
@@ -195,36 +196,26 @@ def general_respond(state: dict) -> dict:
 
 
 def emotion_monitor(state: dict) -> dict:
-    """情绪监控节点 - 检测升级信号"""
+    """情绪监控节点 - 使用共享 evaluate_escalation 检测升级信号
+
+    检测条件 (由 evaluate_escalation 统一处理):
+      - 连续工具失败 >= 2 -> escalate_to_human
+      - 投诉关键词 -> escalate_to_complaint
+      - 极端负面情绪(>0.9) -> escalate_to_complaint
+    """
     timer = TraceTimer()
     timer.start()
     trace_id = state.get("trace_id", "")
 
-    emotion = state.get("emotion", "neutral")
-    intensity = state.get("emotion_intensity", 0.3)
-
-    escalate = False
-    signal = None
-
-    # 检测极端负面情绪
-    if intensity > EMOTION_INTENSITY_THRESHOLD and emotion in ("angry", "frustrated"):
-        escalate = True
-        signal = ESCALATE_TO_COMPLAINT
-
-    # 检测投诉关键词 — 在最近所有客户消息中搜索
-    messages = state.get("messages", [])
-    if messages:
-        recent_human_text = " ".join(
-            getattr(m, "content", "") for m in messages[-6:]
-            if getattr(m, "type", "") == "human"
-        )
-        complaint_keywords = ["投诉", "骗子", "315", "曝光", "举报"]
-        if any(kw in recent_human_text for kw in complaint_keywords):
-            escalate = True
-            signal = ESCALATE_TO_COMPLAINT
+    # 使用共享升级检测工具
+    signal = evaluate_escalation(state)
+    escalate = signal is not None
 
     # 从 general_respond 读取内部 findings
     inner_findings = state.get("_findings") or {}
+
+    if signal:
+        logger.info(f"[{trace_id}] 通用子图升级信号: {signal}")
 
     return {
         "agent_findings": [{
@@ -237,7 +228,7 @@ def emotion_monitor(state: dict) -> dict:
         "emotion_escalate": escalate,
         "escalate_signal": signal,
         "trace_events": [trace(trace_id, "emotion_monitor", "completed",
-                               timer.elapsed_ms(), {"escalate": escalate})],
+                               timer.elapsed_ms(), {"escalate_signal": signal})],
     }
 
 

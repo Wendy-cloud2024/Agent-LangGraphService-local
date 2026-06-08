@@ -163,6 +163,7 @@ class PreSalesState(AgentSubgraphState):
     recommendations: list[dict]               # 推荐结果
     promotions: list[dict]                    # 匹配的优惠活动
     knowledge_results: list[dict]             # 知识库检索结果
+    _findings: dict                           # presales_respond → escalation_monitor 内部传递
 
 
 # ==================== 售中子图状态 ====================
@@ -173,6 +174,7 @@ class InSalesState(AgentSubgraphState):
     payment_info: dict | None                 # 支付信息
     action_plan: dict | None                  # 操作计划
     tool_execution_result: dict | None        # 工具执行结果
+    _findings: dict                           # insales_respond → escalation_monitor 内部传递
 
 
 # ==================== 售后子图状态 ====================
@@ -184,6 +186,7 @@ class AfterSalesState(AgentSubgraphState):
     evidence_collected: list[dict]            # 收集的证据
     resolution_plan: dict | None              # 解决方案
     tool_execution_result: dict | None        # 工具执行结果
+    _findings: dict                           # aftersales_respond → escalation_monitor 内部传递
 
 
 # ==================== 投诉子图状态 ====================

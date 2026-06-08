@@ -24,7 +24,8 @@ from langchain_core.tools import tool
 
 from src.config.settings import GENERATOR_MODEL
 from src.config.llm import create_llm
-from src.state.schema import PreSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION
+from src.state.schema import PreSalesState, SubgraphOutput, RESULT_TYPE_NORMAL, RESULT_TYPE_CLARIFICATION, ESCALATE_TO_COMPLAINT, ESCALATE_TO_HUMAN
+from src.utils.escalation import evaluate_escalation
 from src.tools.ecommerce_tools import (
     check_inventory, find_promotions, search_knowledge_base,
     search_products, get_product_details,
@@ -305,6 +306,7 @@ def presales_respond(state: dict) -> dict:
             "result_type": RESULT_TYPE_CLARIFICATION,
             "clarification_request": clarification,
             "escalate_signal": None,
+            "_findings": {},  # 澄清时不检查升级
             "trace_events": [trace(trace_id, "presales_respond", "completed",
                                    timer.elapsed_ms(), {"action": "clarification"})],
         }
@@ -336,22 +338,51 @@ def presales_respond(state: dict) -> dict:
         answer = "抱歉，暂时无法获取商品信息，请稍后再试。"
 
     return {
-        "agent_findings": [{
-            "source_agent": "presales_agent",
-            "result_type": RESULT_TYPE_NORMAL,
-            "findings": {
-                "answer": answer,
-                "product": product_info,
-                "in_stock": inventory.get("available", False),
-                "promotions": promotions,
-            },
-            "clarification_request": None,
-            "escalate_signal": None,
-        }],
         "result_type": RESULT_TYPE_NORMAL,
         "clarification_request": None,
         "escalate_signal": None,
+        "_findings": {
+            "answer": answer,
+            "product": product_info,
+            "in_stock": inventory.get("available", False),
+            "promotions": promotions,
+        },
         "trace_events": [trace(trace_id, "presales_respond", "completed", timer.elapsed_ms())],
+    }
+
+
+def escalation_monitor(state: dict) -> dict:
+    """售前子图升级监控 - 检测投诉关键词和极端情绪
+
+    触发条件:
+      - 客户使用投诉关键词 → escalate_to_complaint
+      - 极端负面情绪(>0.9) → escalate_to_complaint
+      - 连续2次工具失败 → escalate_to_human
+    """
+    timer = TraceTimer()
+    timer.start()
+    trace_id = state.get("trace_id", "")
+
+    # 综合评估升级信号
+    signal = evaluate_escalation(state)
+
+    # 读取 presales_respond 的内部 findings
+    inner_findings = state.get("_findings") or {}
+
+    if signal:
+        logger.info(f"[{trace_id}] 售前子图升级信号: {signal}")
+
+    return {
+        "agent_findings": [{
+            "source_agent": "presales_agent",
+            "result_type": RESULT_TYPE_NORMAL,
+            "findings": inner_findings,
+            "clarification_request": None,
+            "escalate_signal": signal,
+        }],
+        "escalate_signal": signal,
+        "trace_events": [trace(trace_id, "escalation_monitor", "completed",
+                               timer.elapsed_ms(), {"escalate_signal": signal})],
     }
 
 
@@ -367,6 +398,7 @@ def build_presales_subgraph() -> StateGraph:
     graph.add_node("recommendation_engine", recommendation_engine)
     graph.add_node("promotion_matcher", promotion_matcher_node)
     graph.add_node("presales_respond", presales_respond)
+    graph.add_node("escalation_monitor", escalation_monitor)
 
     graph.set_entry_point("product_lookup")
     graph.add_edge("product_lookup", "knowledge_search")
@@ -374,7 +406,15 @@ def build_presales_subgraph() -> StateGraph:
     graph.add_edge("inventory_check", "recommendation_engine")
     graph.add_edge("recommendation_engine", "promotion_matcher")
     graph.add_edge("promotion_matcher", "presales_respond")
-    graph.add_edge("presales_respond", END)
+    # presales_respond → escalation_monitor → END
+    # 澄清请求直接到END（在presales_respond中判断）
+    # 正常结果经过escalation_monitor检测升级信号
+    graph.add_conditional_edges(
+        "presales_respond",
+        lambda s: "escalation_monitor" if s.get("result_type") != RESULT_TYPE_CLARIFICATION else END,
+        {"escalation_monitor": "escalation_monitor", END: END},
+    )
+    graph.add_edge("escalation_monitor", END)
 
     return graph
 
