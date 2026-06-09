@@ -1,25 +1,38 @@
-"""WebSocket 处理器 — 实时对话 + 人工审核交互"""
+"""WebSocket 处理器 — 实时对话 + 人工审核交互
+
+核心设计: 主循环统一接收消息，通过 _waiting_for 字段判断当前期待的输入类型。
+这样避免了嵌套 receive_json 导致的消息竞争问题。
+"""
 
 import asyncio
 import logging
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.server.session_manager import session_manager
 from src.server.graph_manager import graph_manager
-from src.server.protocol import parse_client_message, HumanDecision, ApprovalDecision
+from src.server.protocol import parse_client_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# 会话当前期待的消息类型
+_WAITING_NONE = "none"
+_WAITING_HUMAN_DECISION = "human_decision"
+_WAITING_APPROVAL = "approval"
+
 
 @router.websocket("/ws/{thread_id}")
 async def websocket_endpoint(websocket: WebSocket, thread_id: str):
-    """WebSocket 端点 — 处理实时对话和人工审核交互"""
+    """WebSocket 端点 — 统一主循环处理所有消息"""
     session = session_manager.get(thread_id)
     if not session:
         await websocket.accept()
-        await websocket.send_json({"type": "error", "message": f"会话 {thread_id} 不存在，请先通过 POST /api/sessions 创建"})
+        await websocket.send_json({
+            "type": "error",
+            "message": f"会话 {thread_id} 不存在，请先通过 POST /api/sessions 创建",
+        })
         await websocket.close()
         return
 
@@ -27,45 +40,70 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str):
     session_manager.set_websocket(thread_id, websocket)
     logger.info(f"WebSocket 连接建立: {thread_id}")
 
+    # 当前期待的消息类型（用于人工审核流程）
+    waiting_for = _WAITING_NONE
+
     try:
         while True:
-            # 接收客户端消息
             raw = await websocket.receive_json()
+            logger.info(f"[{thread_id}] 收到消息: {raw.get('type', '?')}")
+
             try:
                 msg = parse_client_message(raw)
             except Exception as e:
                 await websocket.send_json({"type": "error", "message": f"消息格式错误: {e}"})
                 continue
 
-            # ---- chat 消息 ----
+            # ---- 按期待类型分发 ----
+            if waiting_for == _WAITING_HUMAN_DECISION:
+                if msg.type == "human_decision":
+                    waiting_for = await _handle_human_decision(websocket, session, msg)
+                else:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "当前等待人工审核决策，请先处理审核请求",
+                    })
+                continue
+
+            elif waiting_for == _WAITING_APPROVAL:
+                if msg.type == "approval":
+                    waiting_for = await _handle_approval(websocket, session, msg)
+                else:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "当前等待投诉审批决策，请先处理审批请求",
+                    })
+                continue
+
+            # ---- 正常消息分发 ----
             if msg.type == "chat":
-                await _handle_chat(websocket, session, msg.content)
+                waiting_for = await _handle_chat(websocket, session, msg.content)
 
-            # ---- human_decision ----
             elif msg.type == "human_decision":
-                await _handle_human_decision(websocket, session, msg)
+                # 没有在等待但收到了 decision（可能前端重发），直接处理
+                waiting_for = await _handle_human_decision(websocket, session, msg)
 
-            # ---- approval ----
             elif msg.type == "approval":
-                await _handle_approval(websocket, session, msg)
+                waiting_for = await _handle_approval(websocket, session, msg)
 
-            # ---- end_takeover ----
             elif msg.type == "end_takeover":
                 await _handle_end_takeover(websocket, session)
+                waiting_for = _WAITING_NONE
 
-            # ---- get_status ----
             elif msg.type == "get_status":
                 state = graph_manager.get_session_state(thread_id)
                 await websocket.send_json({"type": "status_response", **state})
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket 断开: {thread_id}")
+    except Exception as e:
+        logger.error(f"WebSocket 异常: {e}", exc_info=True)
     finally:
         session_manager.set_websocket(thread_id, None)
 
 
-async def _handle_chat(websocket: WebSocket, session, content: str):
-    """处理客户消息：调用图 → 发送进度 → 处理中断"""
+async def _handle_chat(websocket: WebSocket, session, content: str) -> str:
+    """处理客户消息。返回下一步期待的消息类型。"""
     await websocket.send_json({
         "type": "node_progress",
         "node": "__thinking__",
@@ -83,45 +121,36 @@ async def _handle_chat(websocket: WebSocket, session, content: str):
     )
     session.first_turn = False
 
-    # 逐条发送事件
+    # 逐条发送事件，检测中断
+    result = _WAITING_NONE
     for event in events:
         await websocket.send_json(event)
 
-        # 如果是中断请求，等待客户端决策后恢复
         if event["type"] == "human_review_request":
-            # 等待人工审核决策
-            raw_decision = await websocket.receive_json()
-            try:
-                decision = parse_client_message(raw_decision)
-                if decision.type == "human_decision":
-                    await _handle_human_decision(websocket, session, decision)
-            except Exception as e:
-                await websocket.send_json({"type": "error", "message": f"决策消息格式错误: {e}"})
-            break  # 中断处理后不再发送后续事件（resume 会重新发送）
+            logger.info(f"[{session.thread_id}] 触发人工审核中断，等待决策")
+            result = _WAITING_HUMAN_DECISION
+            break
 
         elif event["type"] == "approval_request":
-            raw_decision = await websocket.receive_json()
-            try:
-                decision = parse_client_message(raw_decision)
-                if decision.type == "approval":
-                    await _handle_approval(websocket, session, decision)
-            except Exception as e:
-                await websocket.send_json({"type": "error", "message": f"审批消息格式错误: {e}"})
+            logger.info(f"[{session.thread_id}] 触发投诉审批中断，等待审批")
+            result = _WAITING_APPROVAL
             break
 
     # 更新接管状态
     state = graph_manager.get_session_state(session.thread_id)
-    if state["takeover"] and not session.session_takeover:
-        session.session_takeover = True
+    session.session_takeover = state["takeover"]
+
+    return result
 
 
-async def _handle_human_decision(websocket: WebSocket, session, decision: HumanDecision):
-    """处理人工审核决策：构建 resume_value 并恢复图"""
+async def _handle_human_decision(websocket: WebSocket, session, decision) -> str:
+    """处理人工审核决策。返回下一步期待的消息类型。"""
     resume_value = {
         "decision": decision.decision,
         "feedback": decision.feedback,
         "edited_response": decision.edited_response,
     }
+    logger.info(f"[{session.thread_id}] 人工审核决策: {decision.decision}")
 
     # 在线程池中恢复中断
     events = await asyncio.to_thread(
@@ -131,28 +160,18 @@ async def _handle_human_decision(websocket: WebSocket, session, decision: HumanD
     )
 
     # 发送后续事件
+    result = _WAITING_NONE
     for event in events:
         await websocket.send_json(event)
 
-        # 可能触发二次中断（人工审核最多2轮）
         if event["type"] == "human_review_request":
-            raw_decision = await websocket.receive_json()
-            try:
-                d2 = parse_client_message(raw_decision)
-                if d2.type == "human_decision":
-                    await _handle_human_decision(websocket, session, d2)
-            except Exception as e:
-                await websocket.send_json({"type": "error", "message": f"二次审核决策格式错误: {e}"})
+            logger.info(f"[{session.thread_id}] 二次人工审核中断")
+            result = _WAITING_HUMAN_DECISION
             break
 
         elif event["type"] == "approval_request":
-            raw_decision = await websocket.receive_json()
-            try:
-                d2 = parse_client_message(raw_decision)
-                if d2.type == "approval":
-                    await _handle_approval(websocket, session, d2)
-            except Exception as e:
-                await websocket.send_json({"type": "error", "message": f"审批决策格式错误: {e}"})
+            logger.info(f"[{session.thread_id}] 审核后触发审批中断")
+            result = _WAITING_APPROVAL
             break
 
     # 更新接管状态
@@ -161,13 +180,16 @@ async def _handle_human_decision(websocket: WebSocket, session, decision: HumanD
     state = graph_manager.get_session_state(session.thread_id)
     session.session_takeover = state["takeover"]
 
+    return result
 
-async def _handle_approval(websocket: WebSocket, session, decision: ApprovalDecision):
-    """处理投诉审批决策"""
+
+async def _handle_approval(websocket: WebSocket, session, decision) -> str:
+    """处理投诉审批决策。返回下一步期待的消息类型。"""
     resume_value = {
         "approved": decision.approved,
         "note": decision.note,
     }
+    logger.info(f"[{session.thread_id}] 投诉审批: {'批准' if decision.approved else '拒绝'}")
 
     events = await asyncio.to_thread(
         graph_manager.resume_interrupt,
@@ -175,18 +197,21 @@ async def _handle_approval(websocket: WebSocket, session, decision: ApprovalDeci
         resume_value,
     )
 
+    result = _WAITING_NONE
     for event in events:
         await websocket.send_json(event)
 
         if event["type"] == "human_review_request":
-            raw_decision = await websocket.receive_json()
-            try:
-                d2 = parse_client_message(raw_decision)
-                if d2.type == "human_decision":
-                    await _handle_human_decision(websocket, session, d2)
-            except Exception as e:
-                await websocket.send_json({"type": "error", "message": f"审核决策格式错误: {e}"})
+            logger.info(f"[{session.thread_id}] 审批后触发人工审核")
+            result = _WAITING_HUMAN_DECISION
             break
+
+        elif event["type"] == "approval_request":
+            logger.info(f"[{session.thread_id}] 二次审批中断")
+            result = _WAITING_APPROVAL
+            break
+
+    return result
 
 
 async def _handle_end_takeover(websocket: WebSocket, session):
