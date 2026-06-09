@@ -48,6 +48,15 @@ async function selectCustomer(customerId: string) {
         </div>
       </div>
 
+      <!-- 演示模式入口 -->
+      <div class="mt-4 text-center">
+        <button @click="$emit('demo')"
+          class="px-4 py-2 text-sm rounded-xl border-2 border-dashed border-amber-300
+                 text-amber-600 hover:bg-amber-50 hover:border-amber-400 transition-all cursor-pointer">
+          🎭 演示模式（无需后端，直接预览 UI）
+        </button>
+      </div>
+
       <!-- 技术标签 -->
       <div class="text-center mt-6 space-x-2">
         <span class="inline-block px-2 py-1 text-xs rounded bg-green-100 text-green-700">LangGraph</span>
