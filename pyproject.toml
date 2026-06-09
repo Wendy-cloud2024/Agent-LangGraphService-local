@@ -18,4 +18,7 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "numpy>=1.26.0",
     "dotenv>=0.9.9",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=13.0",
 ]
