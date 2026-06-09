@@ -69,3 +69,8 @@ data/customers/*.json
 .chroma_db/
 index/bm25_cache.pkl
 index/file_hashes.json
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
