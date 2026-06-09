@@ -20,6 +20,17 @@ export const useChatStore = defineStore('chat', () => {
   const humanReviewPending = ref<HumanReviewRequest | null>(null)
   const approvalPending = ref<ApprovalRequest | null>(null)
 
+  // ---- 演示模式 ----
+  const demoMode = ref(false)
+  /** 演示模式下，人工决策后的回调（由 ChatWindow 注入） */
+  const _demoOnHumanDecision = ref<
+    ((decision: string, feedback: string, editedResponse: string) => Promise<void>) | null
+  >(null)
+  /** 演示模式下，审批决策后的回调 */
+  const _demoOnApproval = ref<
+    ((approved: boolean, note: string) => Promise<void>) | null
+  >(null)
+
   // ---- getters ----
   const lastAgentMetadata = computed(() => currentMetadata.value)
 
@@ -46,7 +57,6 @@ export const useChatStore = defineStore('chat', () => {
       case 'human_review_request':
         isProcessing.value = false
         humanReviewPending.value = event
-        // 把待审核内容作为系统消息显示
         _addMessage('system', `[人工审核请求] 风险等级: ${event.review_info.risk_level}`)
         break
 
@@ -57,7 +67,6 @@ export const useChatStore = defineStore('chat', () => {
         break
 
       case 'status_response':
-        // 状态响应由 session store 处理
         break
 
       case 'error':
@@ -78,7 +87,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /** 发送人工审核决策 */
-  function submitHumanDecision(
+  async function submitHumanDecision(
     decision: 'approve' | 'edit' | 'reject_regenerate' | 'reject_reclassify' | 'takeover',
     feedback: string = '',
     editedResponse: string = '',
@@ -86,22 +95,34 @@ export const useChatStore = defineStore('chat', () => {
     if (!humanReviewPending.value) return
     humanReviewPending.value = null
     isProcessing.value = true
+    nodeProgress.value = []
     _addMessage('system', `[人工决策: ${decision}]`)
-    wsClient.send({
-      type: 'human_decision',
-      decision,
-      feedback,
-      edited_response: editedResponse,
-    })
+
+    if (demoMode.value && _demoOnHumanDecision.value) {
+      await _demoOnHumanDecision.value(decision, feedback, editedResponse)
+    } else {
+      wsClient.send({
+        type: 'human_decision',
+        decision,
+        feedback,
+        edited_response: editedResponse,
+      })
+    }
   }
 
   /** 发送审批决策 */
-  function submitApproval(approved: boolean, note: string = '') {
+  async function submitApproval(approved: boolean, note: string = '') {
     if (!approvalPending.value) return
     approvalPending.value = null
     isProcessing.value = true
+    nodeProgress.value = []
     _addMessage('system', `[审批决策: ${approved ? '批准' : '拒绝'}]`)
-    wsClient.send({ type: 'approval', approved, note })
+
+    if (demoMode.value && _demoOnApproval.value) {
+      await _demoOnApproval.value(approved, note)
+    } else {
+      wsClient.send({ type: 'approval', approved, note })
+    }
   }
 
   /** 清空消息 */
@@ -112,6 +133,16 @@ export const useChatStore = defineStore('chat', () => {
     humanReviewPending.value = null
     approvalPending.value = null
     isProcessing.value = false
+  }
+
+  /** 开启演示模式 */
+  function enableDemoMode(
+    onHumanDecision: (decision: string, feedback: string, editedResponse: string) => Promise<void>,
+    onApproval: (approved: boolean, note: string) => Promise<void>,
+  ) {
+    demoMode.value = true
+    _demoOnHumanDecision.value = onHumanDecision
+    _demoOnApproval.value = onApproval
   }
 
   // ---- helpers ----
@@ -135,10 +166,12 @@ export const useChatStore = defineStore('chat', () => {
     humanReviewPending,
     approvalPending,
     lastAgentMetadata,
+    demoMode,
     handleServerEvent,
     sendMessage,
     submitHumanDecision,
     submitApproval,
     clearMessages,
+    enableDemoMode,
   }
 })

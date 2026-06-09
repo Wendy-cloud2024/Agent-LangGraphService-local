@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, onMounted } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useChatStore } from '@/stores/chat'
 import StatusBar from '@/components/StatusBar.vue'
@@ -15,11 +15,12 @@ import {
   simulateComplaintApproval,
 } from '@/utils/mock-ws'
 
+const props = defineProps<{ demoMode?: boolean }>()
+
 const sessionStore = useSessionStore()
 const chatStore = useChatStore()
 
 const messagesContainer = ref<HTMLElement | null>(null)
-const demoMode = ref(false)
 
 // 新消息时自动滚动到底部
 watch(() => chatStore.messages.length, async () => {
@@ -31,18 +32,21 @@ watch(() => chatStore.messages.length, async () => {
 
 // ==================== 演示模式 ====================
 
-function enableDemoMode() {
-  demoMode.value = true
-  // 设置一个虚拟会话
-  if (!sessionStore.session) {
-    sessionStore.session = {
-      thread_id: 'demo-session-001',
-      customer_id: 'C001',
-      customer_tier: 'vip',
-      customer_name: '张三',
-    }
+onMounted(() => {
+  if (props.demoMode) {
+    // 注册演示回调 — 人工决策后用模拟数据继续流程
+    chatStore.enableDemoMode(
+      // onHumanDecision
+      async (decision: string, _feedback: string, _editedResponse: string) => {
+        await simulateApproveAfterReview((e) => chatStore.handleServerEvent(e))
+      },
+      // onApproval
+      async (_approved: boolean, _note: string) => {
+        await simulateApproveAfterReview((e) => chatStore.handleServerEvent(e))
+      },
+    )
   }
-}
+})
 
 async function demoNormal() {
   chatStore.clearMessages()
@@ -56,11 +60,6 @@ async function demoHumanReview() {
   chatStore.handleServerEvent({ type: 'node_progress', node: '__thinking__', tags: {} })
   _addCustomerMessage('我买的衣服质量太差了，要求全额退款加赔偿！')
   await simulateHumanReview((e) => chatStore.handleServerEvent(e))
-}
-
-async function demoApprove() {
-  chatStore.handleServerEvent({ type: 'node_progress', node: '__thinking__', tags: {} })
-  await simulateApproveAfterReview((e) => chatStore.handleServerEvent(e))
 }
 
 async function demoClarification() {
@@ -94,7 +93,7 @@ function _addCustomerMessage(content: string) {
     <StatusBar />
 
     <!-- 演示模式工具栏 -->
-    <div class="border-b border-amber-200 bg-amber-50 px-4 py-2 shrink-0">
+    <div v-if="demoMode" class="border-b border-amber-200 bg-amber-50 px-4 py-2 shrink-0">
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs font-medium text-amber-700">🎭 演示模式</span>
         <button @click="demoNormal"
@@ -113,10 +112,6 @@ function _addCustomerMessage(content: string) {
           class="px-2 py-1 text-xs rounded bg-purple-100 text-purple-700 hover:bg-purple-200 cursor-pointer transition-colors">
           📢 投诉审批
         </button>
-        <button v-if="chatStore.humanReviewPending" @click="demoApprove"
-          class="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 cursor-pointer transition-colors animate-pulse">
-          ✅ 模拟审核通过
-        </button>
       </div>
     </div>
 
@@ -125,7 +120,7 @@ function _addCustomerMessage(content: string) {
       <!-- 无消息提示 -->
       <div v-if="chatStore.messages.length === 0 && !chatStore.isProcessing"
         class="text-center py-12">
-        <p class="text-gray-400 text-sm">点击上方按钮查看不同场景的 UI 表现</p>
+        <p v-if="demoMode" class="text-gray-400 text-sm">点击上方按钮查看不同场景的 UI 表现</p>
       </div>
 
       <MessageBubble
