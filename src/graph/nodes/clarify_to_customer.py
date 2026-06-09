@@ -73,7 +73,7 @@ def clarify_to_customer(state: dict) -> dict:
         "messages": [AIMessage(content=clarification_msg)],
         "pending_clarification": True,
         "pending_subgraph": pending_subgraph,
-        "pending_clarification_intent": state.get("intent_labels", [{}])[0].get("intent", ""),
+        "pending_clarification_intent": (state.get("intent_labels") or [{}])[0].get("intent", ""),
         "pending_accumulated_state": {
             "intent_labels": state.get("intent_labels", []),
             "emotion": state.get("emotion", ""),
