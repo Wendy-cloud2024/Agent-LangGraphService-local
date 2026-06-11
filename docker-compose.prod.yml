@@ -1,0 +1,150 @@
+# =============================================================================
+# 📚 docker-compose.prod.yml — 生产环境编排
+# =============================================================================
+#
+# 【开发 vs 生产的区别】
+#
+# 开发环境 (docker-compose.yml):
+#   ✅ 源码绑定挂载（改代码立即生效）
+#   ✅ --reload 热重载
+#   ✅ Vite HMR 热更新
+#   ✅ 两个端口（8000 后端 + 5173 前端）
+#
+# 生产环境 (本文件):
+#   ✅ 源码打入镜像（不再挂载，不可修改）
+#   ✅ 无 --reload（性能优先）
+#   ✅ nginx 静态服务（比 Vite 高效）
+#   ✅ 单端口 80（nginx 统一入口）
+#   ✅ 自动重启策略
+#   ✅ 命名卷持久化数据
+#
+# 【如何使用】
+# docker-compose -f docker-compose.prod.yml up -d    启动
+# docker-compose -f docker-compose.prod.yml down       停止
+# -f 指定使用哪个 compose 文件（不指定则默认用 docker-compose.yml）
+#
+# =============================================================================
+
+services:
+
+  # =========================================================================
+  # 后端服务：FastAPI（生产模式）
+  # =========================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+
+    container_name: thesis-backend-prod
+
+    ports:
+      # 生产环境只暴露 8000（nginx 代理后甚至可以不暴露）
+      - "8000:8000"
+
+    # 【env_file vs environment】
+    # env_file: 从 .env 文件批量加载
+    # 注意：生产环境应该用 .env.production 或密钥管理服务
+    # 不要把真实密钥提交到 git！
+    env_file:
+      - .env
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+
+    # 【生产环境的 Volume 策略】
+    # 与开发环境不同：使用命名卷而非绑定挂载
+    #
+    # ┌───────────────────┬──────────────────────────────────────┐
+    # │ 绑定挂载（开发）    │ 命名卷（生产）                         │
+    # ├───────────────────┼──────────────────────────────────────┤
+    # │ ./src:/app/src    │ 不挂载源码（已在镜像中）                 │
+    # │ ./data:/app/data  │ app-data:/app/data（Docker 管理）       │
+    # │ 适合：频繁修改代码   │ 适合：数据持久化，不关心宿主机路径        │
+    # └───────────────────┴──────────────────────────────────────┘
+    #
+    volumes:
+      # 命名卷：业务数据（SQLite 数据库 + 客户画像）
+      # Docker 自动管理存储位置（通常在 /var/lib/docker/volumes/ 下）
+      - app-data:/app/data
+
+      # 命名卷：向量数据库（ChromaDB 索引）
+      - chroma_db:/app/.chroma_db
+
+      # 命名卷：BM25 索引缓存
+      - index-data:/app/index
+
+    # 【生产环境不覆盖 command】
+    # 使用 Dockerfile 中的默认 CMD，不带 --reload
+    # --reload 在生产环境中会浪费资源监听文件变化
+
+    # 【restart 策略】
+    # unless-stopped: 除非手动停止，否则总是重启
+    #   - 崩溃 → 自动重启 ✅
+    #   - 服务器重启 → 自动启动 ✅
+    #   - 手动 docker stop → 不自动重启 ✅
+    # 其他选项：
+    #   no: 不重启（默认）
+    #   always: 总是重启（包括手动停止后，Docker 守护进程启动时也会重启）
+    #   on-failure: 只在非零退出码时重启
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/customers"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # =========================================================================
+  # 前端服务：Nginx 静态文件服务 + 反向代理（生产模式）
+  # =========================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      # target: production — 构建到 nginx 阶段
+      # 即：Node.js 构建 Vue → nginx 复制 dist/ → 最终是 nginx 镜像
+
+    container_name: thesis-frontend-prod
+
+    ports:
+      # 生产环境只暴露 80 端口（标准 HTTP 端口）
+      # 浏览器访问 http://your-server/ → nginx → Vue 前端
+      # 浏览器请求 /api/... → nginx 反向代理 → backend:8000
+      # 所有流量通过 nginx 统一入口，安全且高效
+      - "80:80"
+
+    # 【生产环境不需要挂载源码】
+    # 代码已经通过 COPY 指令打入了镜像
+    # 容器内的文件是只读的镜像层 + 可写的容器层
+    # 没有 volume 挂载 = 容器删除后所有数据随容器一起消失（这正是我们想要的）
+    volumes: []
+
+    depends_on:
+      backend:
+        condition: service_healthy
+        # condition: service_healthy — 等 backend 健康检查通过后再启动
+        # 比开发环境的 depends_on 更可靠
+        # 开发环境只保证启动顺序，不保证服务就绪
+
+    restart: unless-stopped
+
+# ── 命名卷声明 ──────────────────────────────────────────────────────
+# 生产环境的所有持久化数据都使用命名卷
+# 命名卷的生命周期独立于容器：
+#   docker-compose down       → 容器删除，但卷保留 ✅
+#   docker-compose down -v    → 容器 + 卷都删除 ⚠️ 数据丢失
+#
+# 备份方法：
+#   docker run --rm -v thesis-app-data:/data -v $(pwd):/backup alpine \
+#     tar czf /backup/data-backup.tar.gz -C /data .
+#
+volumes:
+  app-data:
+    name: thesis-app-data
+  chroma_db:
+    name: thesis-chroma-db-prod
+  index-data:
+    name: thesis-index-data

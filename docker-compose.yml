@@ -1,0 +1,161 @@
+# =============================================================================
+# 📚 docker-compose.yml — 开发环境编排
+# =============================================================================
+#
+# 【什么是 Docker Compose？】
+# Dockerfile 只能构建单个镜像。但真实项目通常有多个服务（前端、后端、数据库等）。
+# Docker Compose 是一个工具，让你用一个 YAML 文件定义和运行多容器应用。
+#
+# 核心概念：
+# - service（服务）: 一个容器实例（如 backend、frontend）
+# - volume（卷）: 数据持久化（防止容器删除后数据丢失）
+# - network（网络）: 服务间通信（Docker 自动创建，容器通过服务名互访）
+#
+# 【常用命令】
+# docker-compose up -d       后台启动所有服务
+# docker-compose down         停止并删除所有容器
+# docker-compose logs -f      实时查看日志（Ctrl+C 退出）
+# docker-compose ps           查看服务状态
+# docker-compose restart      重启服务
+# docker-compose build        重新构建镜像
+#
+# =============================================================================
+
+# ── 服务定义 ──────────────────────────────────────────────────────────
+services:
+
+  # =========================================================================
+  # 后端服务：FastAPI + LangGraph + RAG
+  # =========================================================================
+  backend:
+    # 【build 配置】
+    # context: . — 构建上下文为当前目录（Dockerfile 所在目录）
+    # target: runtime — 只构建到 Dockerfile 中的 runtime 阶段
+    #   Dockerfile 有 builder 和 runtime 两个阶段
+    #   开发和生产都只需要 runtime 阶段的产物
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+
+    # 【容器名称】方便识别，不然 Docker 会自动生成如 thesis-agent-backend-1
+    container_name: thesis-backend
+
+    # 【端口映射】格式：宿主机端口:容器端口
+    # 访问宿主机的 localhost:8000 → 转发到容器的 8000 端口
+    ports:
+      - "8000:8000"
+
+    # 【环境变量】两种方式传入：
+    # 1. env_file: 从 .env 文件加载所有变量（适合大量密钥）
+    # 2. environment: 直接在 YAML 中定义（适合少量覆盖）
+    env_file:
+      - .env
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+
+    # 【Volume（卷）挂载】开发环境的核心配置！
+    #
+    # 【什么是 Volume？】
+    # 容器内的文件系统是临时的——容器删除后文件就没了。
+    # Volume 将宿主机的目录"映射"到容器内，实现数据持久化和实时同步。
+    #
+    # 两种 Volume 类型：
+    # ┌─────────────┬──────────────────────┬──────────────────────────┐
+    # │ 类型        │ 语法                 │ 说明                      │
+    # ├─────────────┼──────────────────────┼──────────────────────────┤
+    # │ 绑定挂载    │ ./src:/app/src       │ 宿主机目录 ↔ 容器目录       │
+    # │ (bind mount)│                      │ 实时双向同步，适合开发      │
+    # ├─────────────┼──────────────────────┼──────────────────────────┤
+    # │ 命名卷      │ chroma_db:/app/.chroma_db │ Docker 管理的持久化卷  │
+    # │ (named vol) │                      │ 不关心宿主机路径，适合数据  │
+    # └─────────────┴──────────────────────┴──────────────────────────┘
+    #
+    volumes:
+      # 绑定挂载：源代码 → 支持热重载
+      # 你在宿主机改了 src/xxx.py → 容器内 /app/src/xxx.py 立即更新
+      # uvicorn --reload 检测到变化 → 自动重启 → 改动即时生效！
+      - ./src:/app/src
+
+      # 绑定挂载：数据目录 → 数据持久化 + 可在宿主机查看
+      # SQLite 数据库、客户画像都在这里
+      - ./data:/app/data
+
+      # 命名卷：ChromaDB 向量库 → 跨容器重启持久化
+      # 向量索引构建慢（几分钟），用命名卷避免每次重启都重建
+      - chroma_db:/app/.chroma_db
+
+      # 绑定挂载：BM25 索引缓存
+      - ./index:/app/index
+
+    # 【command 覆盖】覆盖 Dockerfile 中的 CMD
+    # 开发环境加上 --reload 参数，代码变化时自动重启
+    # 生产环境不加（在 docker-compose.prod.yml 中）
+    command: >
+      python -m uvicorn src.server.run_server:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+
+    # 【健康检查】覆盖 Dockerfile 中的 HEALTHCHECK（可选）
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/customers"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    # 【restart 策略】
+    # no: 不自动重启（默认，开发环境推荐，避免隐藏错误）
+    restart: "no"
+
+  # =========================================================================
+  # 前端服务：Vue 3 + Vite 开发服务器（热重载）
+  # =========================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+      # target: dev — 只构建到 Dockerfile 的 dev 阶段
+      # dev 阶段只安装依赖，源码通过 volume 挂载
+
+    container_name: thesis-frontend
+
+    ports:
+      - "5173:5173"
+
+    environment:
+      # 【Docker 网络中的 API 地址】
+      # 在容器内部，localhost 指向容器自身
+      # 要访问后端容器，必须使用 Docker 服务名 "backend"
+      # 这会覆盖 vite.config.ts 中的默认值 http://localhost:8000
+      - VITE_API_TARGET=http://backend:8000
+
+    volumes:
+      # 绑定挂载：源代码 → Vite HMR（Hot Module Replacement）热更新
+      # 修改 .vue/.ts 文件 → 浏览器自动更新，无需刷新页面
+      - ./frontend/src:/app/src
+
+      # 绑定挂载：public 目录（如果有静态资源）
+      - ./frontend/public:/app/public
+
+    # 【depends_on 依赖关系】
+    # 确保 backend 先启动，再启动 frontend
+    # 注意：这只保证启动顺序，不保证 backend 已经完全就绪
+    # 更可靠的方案是加 healthcheck + condition: service_healthy
+    depends_on:
+      - backend
+
+    restart: "no"
+
+# ── 命名卷声明 ──────────────────────────────────────────────────────
+# 在这里声明的命名卷，Docker 会在宿主机上自动管理存储位置
+# 即使 docker-compose down 删除容器，命名卷的数据仍然保留
+# 要彻底删除命名卷：docker-compose down -v（⚠️ 会丢失数据！）
+#
+volumes:
+  chroma_db:
+    # name: 自定义卷名前缀，避免与其他项目冲突
+    name: thesis-chroma_db
