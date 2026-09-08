@@ -1,6 +1,13 @@
-# 🛒 Thesis-Agent：基于 LangGraph 的多 Agent 电商智能客服系统
+# 🛒 Agent-LangGraphService-local：基于 LangGraph 的智能电商客服系统
 
-> 毕业设计项目 — 基于 LangGraph 的多 Agent 并行编排 + 人工审核闭环的电商智能客服系统
+> 面向实际业务场景的智能客服项目，支持持续迭代和功能扩展。
+
+## 当前维护方向
+
+- 调整项目命名、目录说明和本地运行文档
+- 按实际业务补充商品、订单、售后等知识库内容
+- 优化 Agent 路由、RAG 检索和人工审核流程
+- 完善测试、错误处理和部署脚本
 
 ## 📖 项目简介
 
@@ -65,7 +72,7 @@
 ## 📁 项目结构
 
 ```
-thesis-agent/
+Agent-LangGraphService-local/
 ├── src/                              # 后端源码
 │   ├── graph/                        # LangGraph 多 Agent 图
 │   │   ├── supervisor.py             # 顶层监督者 StateGraph（核心编排）
@@ -198,8 +205,8 @@ thesis-agent/
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/psa0715/thesis-agent.git
-cd thesis-agent
+git clone https://github.com/Wendy-cloud2024/Agent-LangGraphService-local.git
+cd Agent-LangGraphService-local
 ```
 
 ### 2. 配置环境变量
